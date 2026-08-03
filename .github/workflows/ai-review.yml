@@ -1,0 +1,91 @@
+name: AI Review (reusable)
+
+# Automated PR code review via PR-Agent (open source, model-agnostic through
+# LiteLLM). Defaults to Google Gemini Flash — free tier, fast, strong at code —
+# on a free Ubuntu runner, so the whole thing costs nothing.
+#
+# Switching providers = change the `model` input + pass the matching API-key
+# secret (LiteLLM model names: gemini/…, openai/…, groq/…, deepseek/…).
+#
+# ⚠️ VERIFY against PR-Agent's current README before relying on it — the action
+# ref (qodo-ai/pr-agent), the env-var keys, and model strings move over time:
+#   https://qodo-merge-docs.qodo.ai/installation/github/  (GitHub Action section)
+#
+# Caller (triggers must include pull_request for PR-Agent to have context):
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#   jobs:
+#     review:
+#       uses: QuietFlare/ci-workflows/.github/workflows/ai-review.yml@v1
+#       with:
+#         extra-instructions: "This is a SwiftUI app; focus on state pitfalls."
+#       secrets:
+#         gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      model:
+        description: LiteLLM model string
+        required: false
+        type: string
+        default: 'gemini/gemini-2.0-flash'
+      fallback-models:
+        description: JSON array of fallback model strings; defaults to just the primary model
+        required: false
+        type: string
+        default: ''
+      extra-instructions:
+        description: Project-specific review focus appended to PR-Agent's prompt (architecture, known hot spots, what to skip)
+        required: false
+        type: string
+        default: ''
+      auto-review:
+        description: Post a review comment on each PR update
+        required: false
+        type: boolean
+        default: true
+      auto-describe:
+        description: Let PR-Agent rewrite the PR description
+        required: false
+        type: boolean
+        default: false
+      auto-improve:
+        description: Post concrete code-improvement suggestions
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      gemini-api-key:
+        description: Google AI Studio key (free at aistudio.google.com/apikey) — required for gemini/* models
+        required: false
+      openai-api-key:
+        description: OpenAI key — required for openai/* models
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    # Skip bot-authored PRs (e.g. Dependabot) — no value reviewing a version bump.
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR-Agent review
+        uses: qodo-ai/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- model selection (LiteLLM) ---
+          config.model: ${{ inputs.model }}
+          config.fallback_models: ${{ inputs.fallback-models != '' && inputs.fallback-models || format('["{0}"]', inputs.model) }}
+          google_ai_studio.gemini_api_key: ${{ secrets.gemini-api-key }}
+          openai.key: ${{ secrets.openai-api-key }}
+          # --- what runs automatically on a PR ---
+          github_action_config.auto_review: ${{ inputs.auto-review }}
+          github_action_config.auto_describe: ${{ inputs.auto-describe }}
+          github_action_config.auto_improve: ${{ inputs.auto-improve }}
+          pr_reviewer.extra_instructions: ${{ inputs.extra-instructions }}

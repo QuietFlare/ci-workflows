@@ -1,0 +1,103 @@
+name: iOS Compliance (reusable)
+
+# App Store compliance preflight — the subset of App Review rejections that CI
+# can actually catch, as cheap Ubuntu file checks (no macOS runner, no build):
+#
+#   1. Privacy manifest (PrivacyInfo.xcprivacy) exists. Required since 2024
+#      for apps using "required reason" APIs — which includes UserDefaults,
+#      so in practice: required.
+#   2. Encryption export declaration (ITSAppUsesNonExemptEncryption) is set
+#      in Info.plist — without it every TestFlight build stalls on a manual
+#      export-compliance question.
+#   3. No signing material committed: .p8 / .p12 / .pem / .mobileprovision /
+#      .cer anywhere in the tree is a leaked credential, not a build input.
+#
+# These are presence checks, not audits — they can't verify the manifest's
+# CONTENT matches the APIs you use. Treat a green run as "not obviously
+# broken", not "compliant".
+#
+# Caller:
+#   jobs:
+#     compliance:
+#       uses: QuietFlare/ci-workflows/.github/workflows/ios-compliance.yml@v1
+#       with:
+#         info-plist: MyApp/Info.plist
+
+on:
+  workflow_call:
+    inputs:
+      privacy-manifest:
+        description: Repo-relative path to PrivacyInfo.xcprivacy. Empty means "any tracked file named PrivacyInfo.xcprivacy satisfies the check".
+        required: false
+        type: string
+        default: ''
+      info-plist:
+        description: Repo-relative path to the app's Info.plist to check for ITSAppUsesNonExemptEncryption. Empty skips the check (e.g. when the key is set via build settings instead).
+        required: false
+        type: string
+        default: ''
+      check-signing-files:
+        description: Fail if certificates, keys, or provisioning profiles are committed
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Privacy manifest present
+        env:
+          PRIVACY_MANIFEST: ${{ inputs.privacy-manifest }}
+        run: |
+          if [ -n "$PRIVACY_MANIFEST" ]; then
+            if [ ! -f "$PRIVACY_MANIFEST" ]; then
+              echo "::error::Privacy manifest not found at '$PRIVACY_MANIFEST'."
+              exit 1
+            fi
+            echo "Privacy manifest: $PRIVACY_MANIFEST"
+          else
+            found="$(git ls-files '*PrivacyInfo.xcprivacy' | head -1)"
+            if [ -z "$found" ]; then
+              echo "::error::No PrivacyInfo.xcprivacy tracked anywhere in the repo. Apps using required-reason APIs (incl. UserDefaults) must ship one."
+              exit 1
+            fi
+            echo "Privacy manifest: $found"
+          fi
+
+      - name: Encryption export declaration
+        if: inputs.info-plist != ''
+        env:
+          INFO_PLIST: ${{ inputs.info-plist }}
+        run: |
+          python3 - <<'EOF'
+          import os, plistlib, sys
+          path = os.environ["INFO_PLIST"]
+          if not os.path.isfile(path):
+              print(f"::error::Info.plist not found at '{path}'.")
+              sys.exit(1)
+          with open(path, "rb") as f:
+              plist = plistlib.load(f)
+          if "ITSAppUsesNonExemptEncryption" not in plist:
+              print("::error::ITSAppUsesNonExemptEncryption is missing from "
+                    f"{path} — every TestFlight build will stall on the "
+                    "export-compliance question until it is declared.")
+              sys.exit(1)
+          print(f"ITSAppUsesNonExemptEncryption = {plist['ITSAppUsesNonExemptEncryption']}")
+          EOF
+
+      - name: No signing material committed
+        if: inputs.check-signing-files
+        run: |
+          hits="$(git ls-files | grep -E '\.(p8|p12|pem|mobileprovision|cer|certSigningRequest)$' || true)"
+          if [ -n "$hits" ]; then
+            echo "::error::Signing material is committed to the repo — revoke these credentials and remove the files:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "No committed signing material."

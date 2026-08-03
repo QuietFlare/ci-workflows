@@ -1,0 +1,27 @@
+# Security & compliance pipeline. Copy to .github/workflows/security.yml.
+#
+# The secret scan and App Store compliance preflight are seconds-cheap on
+# free Ubuntu runners, so they run on every PR. CodeQL needs a full macOS
+# build — this example turns it on only for the weekly schedule and manual
+# runs, via the `codeql` input keyed off the event.
+name: Security
+
+on:
+  pull_request:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # for CodeQL upload; drop if codeql stays off
+
+jobs:
+  security:
+    uses: QuietFlare/ci-workflows/.github/workflows/security-pipeline.yml@v1
+    with:
+      info-plist: MyApp/Info.plist
+      # CodeQL only on the weekly schedule / manual runs — not per-PR.
+      codeql: ${{ github.event_name != 'pull_request' }}
+      project: MyApp.xcodeproj
+      scheme: MyApp

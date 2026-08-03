@@ -1,0 +1,42 @@
+# PR pipeline for a Kotlin Multiplatform repo with an iOS app (shared Kotlin
+# core + SwiftUI shell). Copy to .github/workflows/ci.yml.
+#
+# Two test tiers: the KMP core's JVM tests run on cheap Ubuntu; the iOS
+# simulator tests (which cover the Swift↔Kotlin bridge and platform-native
+# code like Keychain) run on macOS. On a public repo both are free — this
+# example triggers on push too.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write   # for the AI review comments
+  issues: write          # for the AI review comments
+
+jobs:
+  pr:
+    uses: QuietFlare/ci-workflows/.github/workflows/pr-pipeline.yml@v1
+    with:
+      gradle-tasks: ':shared:jvmTest'
+      project: iosApp/iosApp.xcodeproj
+      scheme: iosApp
+      java-version: '17'        # the Xcode pre-build step runs Gradle
+      xcode-version: '26'
+      destination: 'platform=iOS Simulator,name=iPhone 17 Pro'
+      runner: 'macos-26'
+      ai-review: true
+      review-instructions: >-
+        Kotlin Multiplatform core + SwiftUI app. Watch the Swift/Kotlin
+        boundary: Int32 vs Int, missing default arguments, date-string
+        formats. Domain logic belongs in the shared core, not the UI layer.
+    secrets:
+      gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

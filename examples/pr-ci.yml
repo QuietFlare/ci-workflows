@@ -1,0 +1,43 @@
+# PR pipeline for a plain SwiftUI/UIKit app. Copy to .github/workflows/ci.yml.
+#
+# Gates every merge: SwiftLint + build + simulator tests + AI review.
+#
+# Trigger pattern for PRIVATE repos: PRs + manual only — macOS runners bill at
+# 10x, and building every push to main burns the free-minute allowance fast.
+# On a PUBLIC repo (free minutes), add `push: {branches: [main]}` freely.
+#
+# One repo secret for the AI review: GEMINI_API_KEY — free key from Google AI
+# Studio (aistudio.google.com/apikey). Or set `ai-review: false` and skip it.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write   # for the AI review comments
+  issues: write          # for the AI review comments
+
+jobs:
+  pr:
+    uses: QuietFlare/ci-workflows/.github/workflows/pr-pipeline.yml@v1
+    with:
+      project: MyApp.xcodeproj
+      scheme: MyApp
+      only-testing: MyAppTests   # unit tests only; drop to also run UI tests
+      swiftlint: true
+      ai-review: true
+      # Tell the reviewer what your app is and where bugs hide — this is the
+      # highest-leverage line in the file.
+      review-instructions: >-
+        This is an iOS SwiftUI app. Focus on correctness bugs, Swift
+        concurrency / @MainActor issues, retain cycles, and SwiftUI state
+        pitfalls. Be brief where the code is fine.
+    secrets:
+      gemini-api-key: ${{ secrets.GEMINI_API_KEY }}

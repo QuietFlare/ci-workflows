@@ -1,0 +1,161 @@
+name: PR Pipeline (reusable)
+
+# Everything that gates a merge, in one call:
+#   - Gradle tests on cheap Ubuntu (KMP/JVM projects — skipped unless
+#     `gradle-tasks` is set)
+#   - iOS simulator build + tests, optional SwiftLint (macOS)
+#   - optional AI code review (PR-Agent + Gemini, free tier)
+#
+# This is the batteries-included entry point. If your repo needs a different
+# composition, call the building blocks (ios-test.yml, gradle-test.yml,
+# ai-review.yml) directly instead.
+#
+# Caller:
+#   on:
+#     pull_request:        # default types include opened/synchronize/reopened
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#     pull-requests: write   # only needed when ai-review: true
+#     issues: write          # only needed when ai-review: true
+#   jobs:
+#     pr:
+#       uses: QuietFlare/ci-workflows/.github/workflows/pr-pipeline.yml@v1
+#       with:
+#         project: MyApp.xcodeproj
+#         scheme: MyApp
+#         ai-review: true
+#       secrets:
+#         gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      # --- iOS test ---
+      scheme:
+        description: Xcode scheme to test
+        required: true
+        type: string
+      project:
+        description: Path to the .xcodeproj (ignored when `workspace` is set)
+        required: false
+        type: string
+        default: ''
+      workspace:
+        description: Path to the .xcworkspace (takes precedence over `project`)
+        required: false
+        type: string
+        default: ''
+      destination:
+        description: xcodebuild -destination string
+        required: false
+        type: string
+        default: 'platform=iOS Simulator,name=iPhone 16'
+      xcode-version:
+        description: Xcode version selector for the test build
+        required: false
+        type: string
+        default: '16'
+      runner:
+        description: macOS runner label for the iOS job
+        required: false
+        type: string
+        default: 'macos-15'
+      only-testing:
+        description: Restrict to one test target/class; empty runs the scheme's whole test plan
+        required: false
+        type: string
+        default: ''
+      swiftlint:
+        description: Run SwiftLint before building
+        required: false
+        type: boolean
+        default: false
+      swiftlint-strict:
+        description: Fail the job on SwiftLint violations
+        required: false
+        type: boolean
+        default: false
+      java-version:
+        description: If set, install a Temurin JDK for the iOS job too (KMP projects whose Xcode build runs Gradle)
+        required: false
+        type: string
+        default: ''
+      prepare-command:
+        description: Optional shell command before the iOS build (e.g. 'xcodegen generate')
+        required: false
+        type: string
+        default: ''
+      # --- Gradle test (skipped unless set) ---
+      gradle-tasks:
+        description: Gradle task(s) to run on Ubuntu (e.g. ':shared:jvmTest'). Empty skips the Gradle job.
+        required: false
+        type: string
+        default: ''
+      gradle-java-version:
+        description: JDK version for the Gradle job
+        required: false
+        type: string
+        default: '17'
+      # --- AI review (off by default) ---
+      ai-review:
+        description: Run the AI code review job (needs a model API key secret and pull-requests/issues write permission from the caller)
+        required: false
+        type: boolean
+        default: false
+      review-model:
+        description: LiteLLM model string for the review
+        required: false
+        type: string
+        default: 'gemini/gemini-2.0-flash'
+      review-instructions:
+        description: Project-specific review focus
+        required: false
+        type: string
+        default: ''
+    secrets:
+      gemini-api-key:
+        description: Google AI Studio key — required for gemini/* review models
+        required: false
+      openai-api-key:
+        description: OpenAI key — required for openai/* review models
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  gradle-test:
+    if: inputs.gradle-tasks != ''
+    uses: ./.github/workflows/gradle-test.yml
+    with:
+      tasks: ${{ inputs.gradle-tasks }}
+      java-version: ${{ inputs.gradle-java-version }}
+
+  ios-test:
+    uses: ./.github/workflows/ios-test.yml
+    with:
+      scheme: ${{ inputs.scheme }}
+      project: ${{ inputs.project }}
+      workspace: ${{ inputs.workspace }}
+      destination: ${{ inputs.destination }}
+      xcode-version: ${{ inputs.xcode-version }}
+      runner: ${{ inputs.runner }}
+      only-testing: ${{ inputs.only-testing }}
+      swiftlint: ${{ inputs.swiftlint }}
+      swiftlint-strict: ${{ inputs.swiftlint-strict }}
+      java-version: ${{ inputs.java-version }}
+      prepare-command: ${{ inputs.prepare-command }}
+
+  ai-review:
+    # Review only makes sense with PR context — skips on workflow_dispatch/push.
+    if: inputs.ai-review && github.event_name == 'pull_request'
+    uses: ./.github/workflows/ai-review.yml
+    with:
+      model: ${{ inputs.review-model }}
+      extra-instructions: ${{ inputs.review-instructions }}
+    secrets:
+      gemini-api-key: ${{ secrets.gemini-api-key }}
+      openai-api-key: ${{ secrets.openai-api-key }}

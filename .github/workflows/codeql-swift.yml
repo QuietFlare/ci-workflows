@@ -1,0 +1,137 @@
+name: CodeQL Swift (reusable)
+
+# Static analysis (SAST) of an iOS app's Swift code with GitHub CodeQL.
+#
+# Two modes, because GitHub prices code scanning differently by visibility:
+# - upload: true (default) — results go straight to the repo's Security tab.
+#   FREE on public repos; on private repos it requires GitHub Advanced Security.
+# - upload: false — the SARIF is attached as a downloadable workflow artifact
+#   instead, for hand review. Use this on personal private repos.
+#
+# A CodeQL build runs on a macOS runner (10x billing on private repos) — most
+# callers want workflow_dispatch and/or a weekly schedule, not every push.
+#
+# Caller:
+#   jobs:
+#     codeql:
+#       uses: QuietFlare/ci-workflows/.github/workflows/codeql-swift.yml@v1
+#       with:
+#         project: MyApp.xcodeproj
+#         scheme: MyApp
+#       permissions:
+#         contents: read
+#         security-events: write   # only needed when upload: true
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        description: Xcode scheme to build for analysis
+        required: true
+        type: string
+      project:
+        description: Path to the .xcodeproj (ignored when `workspace` is set)
+        required: false
+        type: string
+        default: ''
+      workspace:
+        description: Path to the .xcworkspace (takes precedence over `project`)
+        required: false
+        type: string
+        default: ''
+      destination:
+        description: xcodebuild -destination string for the analysis build
+        required: false
+        type: string
+        default: 'platform=iOS Simulator,name=iPhone 16'
+      xcode-version:
+        description: Xcode version selector; pick one whose iOS simulator runtime is on the runner image
+        required: false
+        type: string
+        default: '16'
+      runner:
+        description: macOS runner label
+        required: false
+        type: string
+        default: 'macos-15'
+      upload:
+        description: Upload results to the Security tab (free on public repos; needs Advanced Security on private ones). When false, the SARIF becomes a workflow artifact.
+        required: false
+        type: boolean
+        default: true
+      java-version:
+        description: If set, install a Temurin JDK + Gradle cache first — for KMP projects whose Xcode build runs Gradle
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ inputs.java-version }} (Temurin)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle (cache + wrapper validation)
+        if: inputs.java-version != ''
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+
+      - name: Build for analysis
+        env:
+          SCHEME: ${{ inputs.scheme }}
+          PROJECT: ${{ inputs.project }}
+          WORKSPACE: ${{ inputs.workspace }}
+          DESTINATION: ${{ inputs.destination }}
+        run: |
+          set -o pipefail
+          if [ -z "$WORKSPACE" ] && [ -z "$PROJECT" ]; then
+            echo "::error::Provide either the 'project' or the 'workspace' input."
+            exit 1
+          fi
+          args=()
+          if [ -n "$WORKSPACE" ]; then
+            args+=(-workspace "$WORKSPACE")
+          else
+            args+=(-project "$PROJECT")
+          fi
+          xcodebuild build \
+            "${args[@]}" \
+            -scheme "$SCHEME" \
+            -sdk iphonesimulator \
+            -destination "$DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:swift"
+          upload: ${{ inputs.upload && 'always' || 'never' }}
+          output: sarif-results
+
+      - name: Upload SARIF as artifact (no-upload mode)
+        if: ${{ !inputs.upload }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-swift-sarif
+          path: sarif-results
+          if-no-files-found: warn

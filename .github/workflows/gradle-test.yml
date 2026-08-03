@@ -1,0 +1,89 @@
+name: Gradle Test (reusable)
+
+# Run JVM-side Gradle tests (plain JVM, Android unit tests, or a Kotlin
+# Multiplatform shared module's jvmTest) on a cheap Ubuntu runner.
+#
+# Design notes:
+# - This is the fast, free-tier-friendly job: put as much of your test suite
+#   as possible behind it and reserve macOS runners (ios-test.yml) for what
+#   genuinely needs a simulator.
+# - gradle/actions/setup-gradle provides the build cache AND validates the
+#   Gradle wrapper JAR against known checksums (supply-chain guard).
+# - HTML test reports are uploaded only on failure — that's the only time
+#   anyone reads them.
+#
+# Minimal caller:
+#   jobs:
+#     test:
+#       uses: QuietFlare/ci-workflows/.github/workflows/gradle-test.yml@v1
+#       with:
+#         tasks: ':shared:jvmTest'
+
+on:
+  workflow_call:
+    inputs:
+      tasks:
+        description: Gradle task(s) to run, space-separated (e.g. ':shared:jvmTest' or 'test lint')
+        required: false
+        type: string
+        default: 'test'
+      java-version:
+        description: JDK version to install
+        required: false
+        type: string
+        default: '17'
+      java-distribution:
+        description: JDK distribution (actions/setup-java name)
+        required: false
+        type: string
+        default: 'temurin'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+      working-directory:
+        description: Directory containing gradlew (for repos where the Gradle project is not at the root)
+        required: false
+        type: string
+        default: '.'
+      artifact-name:
+        description: Name for the test-report artifact uploaded on failure
+        required: false
+        type: string
+        default: 'gradle-test-reports'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle (cache + wrapper validation)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run Gradle tasks
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TASKS: ${{ inputs.tasks }}
+        # Word-splitting on $TASKS is deliberate — it carries multiple tasks.
+        run: |
+          # shellcheck disable=SC2086
+          ./gradlew $TASKS
+
+      - name: Upload test reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: '**/build/reports/tests/'
+          if-no-files-found: ignore

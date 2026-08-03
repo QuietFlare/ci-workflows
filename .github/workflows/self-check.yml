@@ -1,0 +1,39 @@
+name: Self-check
+
+# CI for the CI: lint every workflow in this repo. Eating our own dog food —
+# a broken reusable workflow breaks every consumer at once, so this gate runs
+# on every change.
+#
+# - actionlint: syntax, expression typing, shellcheck of run: blocks
+# - zizmor: security audit of workflow patterns (template injection,
+#   permissions, unpinned actions). Advisory for now; tighten once the
+#   baseline findings are triaged.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  zizmor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: zizmor security audit (advisory)
+        continue-on-error: true
+        run: pipx run zizmor --no-online-audits .

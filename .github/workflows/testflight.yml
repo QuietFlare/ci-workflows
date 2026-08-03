@@ -1,0 +1,173 @@
+name: TestFlight (reusable)
+
+# Archive an iOS app and upload it to TestFlight using App Store Connect
+# cloud signing — no certificates or provisioning profiles stored in the repo.
+#
+# Requires an App Store Connect API key (App Store Connect → Users and Access
+# → Integrations) passed as three secrets. The key lets xcodebuild do cloud
+# signing (-allowProvisioningUpdates) and upload in one go.
+#
+# The export step needs an ExportOptions.plist in the caller's repo (default
+# path .github/ExportOptions.plist) with at least:
+#   method: app-store-connect (Xcode 15+; older docs say app-store)
+#   destination: upload
+#
+# Caller (tag-triggered releases):
+#   on:
+#     push:
+#       tags: ['v*']
+#     workflow_dispatch:
+#   jobs:
+#     testflight:
+#       uses: QuietFlare/ci-workflows/.github/workflows/testflight.yml@v1
+#       with:
+#         project: MyApp.xcodeproj
+#         scheme: MyApp
+#       secrets:
+#         asc-key-id: ${{ secrets.ASC_KEY_ID }}
+#         asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+#         asc-key-p8: ${{ secrets.ASC_KEY_P8 }}
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        description: Xcode scheme to archive
+        required: true
+        type: string
+      project:
+        description: Path to the .xcodeproj (ignored when `workspace` is set)
+        required: false
+        type: string
+        default: ''
+      workspace:
+        description: Path to the .xcworkspace (takes precedence over `project`)
+        required: false
+        type: string
+        default: ''
+      configuration:
+        description: Build configuration to archive
+        required: false
+        type: string
+        default: 'Release'
+      export-options:
+        description: Path to the ExportOptions.plist in the caller's repo
+        required: false
+        type: string
+        default: '.github/ExportOptions.plist'
+      xcode-version:
+        description: Xcode version selector. Release archives should use a current toolchain — Apple expects submissions built with recent Xcode.
+        required: false
+        type: string
+        default: 'latest-stable'
+      runner:
+        description: macOS runner label
+        required: false
+        type: string
+        default: 'macos-15'
+      java-version:
+        description: If set, install a Temurin JDK + Gradle cache first — for KMP projects whose Xcode build runs Gradle
+        required: false
+        type: string
+        default: ''
+      prepare-command:
+        description: Optional shell command run after toolchain setup, before archiving (e.g. 'xcodegen generate')
+        required: false
+        type: string
+        default: ''
+    secrets:
+      asc-key-id:
+        description: App Store Connect API key ID
+        required: true
+      asc-issuer-id:
+        description: App Store Connect API issuer ID
+        required: true
+      asc-key-p8:
+        description: Full contents of the AuthKey_XXXX.p8 file
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ inputs.java-version }} (Temurin)
+        if: inputs.java-version != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle (cache + wrapper validation)
+        if: inputs.java-version != ''
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ inputs.xcode-version }}
+
+      - name: Prepare
+        if: inputs.prepare-command != ''
+        env:
+          PREPARE_COMMAND: ${{ inputs.prepare-command }}
+        run: eval "$PREPARE_COMMAND"
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.asc-key-id }}
+          ASC_KEY_P8: ${{ secrets.asc-key-p8 }}
+        run: |
+          mkdir -p "$HOME/private_keys"
+          printf '%s' "$ASC_KEY_P8" > "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Archive (cloud signing via API key)
+        env:
+          SCHEME: ${{ inputs.scheme }}
+          PROJECT: ${{ inputs.project }}
+          WORKSPACE: ${{ inputs.workspace }}
+          CONFIGURATION: ${{ inputs.configuration }}
+          ASC_KEY_ID: ${{ secrets.asc-key-id }}
+          ASC_ISSUER_ID: ${{ secrets.asc-issuer-id }}
+        run: |
+          set -o pipefail
+          if [ -z "$WORKSPACE" ] && [ -z "$PROJECT" ]; then
+            echo "::error::Provide either the 'project' or the 'workspace' input."
+            exit 1
+          fi
+          args=()
+          if [ -n "$WORKSPACE" ]; then
+            args+=(-workspace "$WORKSPACE")
+          else
+            args+=(-project "$PROJECT")
+          fi
+          xcodebuild archive \
+            "${args[@]}" \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -sdk iphoneos \
+            -archivePath build/App.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Export & upload to TestFlight
+        env:
+          EXPORT_OPTIONS: ${{ inputs.export-options }}
+          ASC_KEY_ID: ${{ secrets.asc-key-id }}
+          ASC_ISSUER_ID: ${{ secrets.asc-issuer-id }}
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportOptionsPlist "$EXPORT_OPTIONS" \
+            -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"

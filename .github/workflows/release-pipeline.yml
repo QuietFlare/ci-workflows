@@ -1,0 +1,165 @@
+name: Release Pipeline (reusable)
+
+# Ship a build to TestFlight — but only after the tests pass one more time on
+# the exact commit being released:
+#   1. Gradle tests on Ubuntu (skipped unless `gradle-tasks` is set)
+#   2. iOS simulator tests (skippable with run-tests: false, e.g. for a
+#      hotfix re-ship of an already-green commit)
+#   3. Archive + upload to TestFlight via App Store Connect cloud signing
+#
+# Tests and the archive may want different Xcode versions on purpose:
+# tests need an Xcode whose iOS simulator runtime is on the runner image,
+# while Apple wants release archives built with a current toolchain — hence
+# `test-xcode-version` (default '16') vs `release-xcode-version`
+# (default 'latest-stable').
+#
+# Caller (tag-triggered):
+#   on:
+#     push:
+#       tags: ['v*']
+#     workflow_dispatch:
+#   jobs:
+#     release:
+#       uses: QuietFlare/ci-workflows/.github/workflows/release-pipeline.yml@v1
+#       with:
+#         project: MyApp.xcodeproj
+#         scheme: MyApp
+#       secrets:
+#         asc-key-id: ${{ secrets.ASC_KEY_ID }}
+#         asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+#         asc-key-p8: ${{ secrets.ASC_KEY_P8 }}
+
+on:
+  workflow_call:
+    inputs:
+      scheme:
+        description: Xcode scheme to test and archive
+        required: true
+        type: string
+      project:
+        description: Path to the .xcodeproj (ignored when `workspace` is set)
+        required: false
+        type: string
+        default: ''
+      workspace:
+        description: Path to the .xcworkspace (takes precedence over `project`)
+        required: false
+        type: string
+        default: ''
+      configuration:
+        description: Build configuration to archive
+        required: false
+        type: string
+        default: 'Release'
+      export-options:
+        description: Path to the ExportOptions.plist in the caller's repo
+        required: false
+        type: string
+        default: '.github/ExportOptions.plist'
+      run-tests:
+        description: Run the iOS simulator tests before archiving
+        required: false
+        type: boolean
+        default: true
+      only-testing:
+        description: Restrict the test pass to one target/class
+        required: false
+        type: string
+        default: ''
+      destination:
+        description: xcodebuild -destination string for the test pass
+        required: false
+        type: string
+        default: 'platform=iOS Simulator,name=iPhone 16'
+      test-xcode-version:
+        description: Xcode version for the test pass (needs its iOS simulator runtime on the runner image)
+        required: false
+        type: string
+        default: '16'
+      release-xcode-version:
+        description: Xcode version for the archive (Apple expects a current toolchain)
+        required: false
+        type: string
+        default: 'latest-stable'
+      runner:
+        description: macOS runner label
+        required: false
+        type: string
+        default: 'macos-15'
+      java-version:
+        description: If set, install a Temurin JDK in the iOS jobs (KMP projects whose Xcode build runs Gradle)
+        required: false
+        type: string
+        default: ''
+      prepare-command:
+        description: Optional shell command before each Xcode build (e.g. 'xcodegen generate')
+        required: false
+        type: string
+        default: ''
+      gradle-tasks:
+        description: Gradle task(s) to run on Ubuntu first (e.g. ':shared:jvmTest'). Empty skips the Gradle job.
+        required: false
+        type: string
+        default: ''
+      gradle-java-version:
+        description: JDK version for the Gradle job
+        required: false
+        type: string
+        default: '17'
+    secrets:
+      asc-key-id:
+        description: App Store Connect API key ID
+        required: true
+      asc-issuer-id:
+        description: App Store Connect API issuer ID
+        required: true
+      asc-key-p8:
+        description: Full contents of the AuthKey_XXXX.p8 file
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  gradle-test:
+    if: inputs.gradle-tasks != ''
+    uses: ./.github/workflows/gradle-test.yml
+    with:
+      tasks: ${{ inputs.gradle-tasks }}
+      java-version: ${{ inputs.gradle-java-version }}
+
+  ios-test:
+    if: inputs.run-tests
+    uses: ./.github/workflows/ios-test.yml
+    with:
+      scheme: ${{ inputs.scheme }}
+      project: ${{ inputs.project }}
+      workspace: ${{ inputs.workspace }}
+      destination: ${{ inputs.destination }}
+      xcode-version: ${{ inputs.test-xcode-version }}
+      runner: ${{ inputs.runner }}
+      only-testing: ${{ inputs.only-testing }}
+      java-version: ${{ inputs.java-version }}
+      prepare-command: ${{ inputs.prepare-command }}
+      artifact-name: 'release-test-results'
+
+  testflight:
+    needs: [gradle-test, ios-test]
+    # Run when the test jobs passed OR were deliberately skipped — but never
+    # after a failure or a cancellation.
+    if: ${{ !failure() && !cancelled() }}
+    uses: ./.github/workflows/testflight.yml
+    with:
+      scheme: ${{ inputs.scheme }}
+      project: ${{ inputs.project }}
+      workspace: ${{ inputs.workspace }}
+      configuration: ${{ inputs.configuration }}
+      export-options: ${{ inputs.export-options }}
+      xcode-version: ${{ inputs.release-xcode-version }}
+      runner: ${{ inputs.runner }}
+      java-version: ${{ inputs.java-version }}
+      prepare-command: ${{ inputs.prepare-command }}
+    secrets:
+      asc-key-id: ${{ secrets.asc-key-id }}
+      asc-issuer-id: ${{ secrets.asc-issuer-id }}
+      asc-key-p8: ${{ secrets.asc-key-p8 }}

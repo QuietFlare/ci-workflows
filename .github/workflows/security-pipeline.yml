@@ -1,0 +1,143 @@
+name: Security Pipeline (reusable)
+
+# The security & compliance gate, composed from the building blocks:
+#   - security-scan: gitleaks full-history secret scan + PR dependency review
+#     (Ubuntu, free)
+#   - ios-compliance: App Store preflight — privacy manifest, encryption
+#     declaration, no committed signing material (Ubuntu, free)
+#   - codeql (OPT-IN): Swift static analysis — needs a full macOS build, so
+#     it's off by default; enable it with `codeql: true` + a scheme, ideally
+#     from a weekly schedule rather than every PR
+#
+# Suggested triggers: pull_request (scan + compliance are seconds-cheap)
+# plus a weekly schedule and workflow_dispatch for the CodeQL run.
+#
+# Caller:
+#   permissions:
+#     contents: read
+#     security-events: write   # only needed when codeql: true with upload
+#   jobs:
+#     security:
+#       uses: QuietFlare/ci-workflows/.github/workflows/security-pipeline.yml@v1
+#       with:
+#         info-plist: MyApp/Info.plist
+
+on:
+  workflow_call:
+    inputs:
+      # --- security-scan ---
+      secret-scan:
+        description: Run the gitleaks full-history secret scan
+        required: false
+        type: boolean
+        default: true
+      dependency-review:
+        description: Run GitHub dependency review (pull_request events only)
+        required: false
+        type: boolean
+        default: true
+      fail-on-severity:
+        description: Minimum vulnerability severity that fails dependency review
+        required: false
+        type: string
+        default: 'high'
+      # --- ios-compliance ---
+      ios-compliance:
+        description: Run the App Store compliance preflight
+        required: false
+        type: boolean
+        default: true
+      privacy-manifest:
+        description: Path to PrivacyInfo.xcprivacy (empty = any tracked one)
+        required: false
+        type: string
+        default: ''
+      info-plist:
+        description: Path to the app's Info.plist for the encryption-declaration check (empty skips it)
+        required: false
+        type: string
+        default: ''
+      check-signing-files:
+        description: Fail if certificates, keys, or provisioning profiles are committed
+        required: false
+        type: boolean
+        default: true
+      # --- CodeQL (opt-in; macOS build) ---
+      codeql:
+        description: Run CodeQL Swift analysis (requires `scheme` and either `project` or `workspace`)
+        required: false
+        type: boolean
+        default: false
+      scheme:
+        description: Xcode scheme for the CodeQL build
+        required: false
+        type: string
+        default: ''
+      project:
+        description: Path to the .xcodeproj for the CodeQL build
+        required: false
+        type: string
+        default: ''
+      workspace:
+        description: Path to the .xcworkspace for the CodeQL build
+        required: false
+        type: string
+        default: ''
+      destination:
+        description: xcodebuild -destination string for the CodeQL build
+        required: false
+        type: string
+        default: 'platform=iOS Simulator,name=iPhone 16'
+      xcode-version:
+        description: Xcode version for the CodeQL build
+        required: false
+        type: string
+        default: '16'
+      runner:
+        description: macOS runner label for the CodeQL build
+        required: false
+        type: string
+        default: 'macos-15'
+      codeql-upload:
+        description: Upload CodeQL results to the Security tab (free on public repos); false attaches the SARIF as an artifact instead
+        required: false
+        type: boolean
+        default: true
+      java-version:
+        description: If set, install a Temurin JDK for the CodeQL build (KMP projects)
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    uses: ./.github/workflows/security-scan.yml
+    with:
+      secret-scan: ${{ inputs.secret-scan }}
+      dependency-review: ${{ inputs.dependency-review }}
+      fail-on-severity: ${{ inputs.fail-on-severity }}
+
+  compliance:
+    if: inputs.ios-compliance
+    uses: ./.github/workflows/ios-compliance.yml
+    with:
+      privacy-manifest: ${{ inputs.privacy-manifest }}
+      info-plist: ${{ inputs.info-plist }}
+      check-signing-files: ${{ inputs.check-signing-files }}
+
+  codeql:
+    if: inputs.codeql && inputs.scheme != ''
+    uses: ./.github/workflows/codeql-swift.yml
+    with:
+      scheme: ${{ inputs.scheme }}
+      project: ${{ inputs.project }}
+      workspace: ${{ inputs.workspace }}
+      destination: ${{ inputs.destination }}
+      xcode-version: ${{ inputs.xcode-version }}
+      runner: ${{ inputs.runner }}
+      upload: ${{ inputs.codeql-upload }}
+      java-version: ${{ inputs.java-version }}

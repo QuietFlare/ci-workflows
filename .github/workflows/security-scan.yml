@@ -1,0 +1,69 @@
+name: Security Scan (reusable)
+
+# Cheap, fast security checks that run entirely on free Ubuntu runners:
+#   - gitleaks: scans the FULL git history for committed secrets (API keys,
+#     tokens, private keys). Findings are redacted in the log.
+#   - dependency review: flags vulnerable or badly-licensed dependencies a PR
+#     introduces. Only meaningful on pull_request events (it diffs base vs
+#     head), so it auto-skips elsewhere. Free on public repos; private repos
+#     need GitHub Advanced Security.
+#
+# ⚠️ VERIFY the gitleaks invocation against its current README occasionally —
+# the image tag and CLI verbs move over time (v8 renamed `detect` → `git`,
+# the old verb still works as an alias): https://github.com/gitleaks/gitleaks
+# (The official gitleaks-action requires a license key for organization-owned
+# repos; running the CLI container directly is free for everyone.)
+#
+# Caller:
+#   jobs:
+#     scan:
+#       uses: QuietFlare/ci-workflows/.github/workflows/security-scan.yml@v1
+
+on:
+  workflow_call:
+    inputs:
+      secret-scan:
+        description: Run the gitleaks full-history secret scan
+        required: false
+        type: boolean
+        default: true
+      dependency-review:
+        description: Run GitHub dependency review (pull_request events only; needs the dependency graph — free on public repos)
+        required: false
+        type: boolean
+        default: true
+      fail-on-severity:
+        description: Minimum vulnerability severity that fails dependency review (low, moderate, high, critical)
+        required: false
+        type: string
+        default: 'high'
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    if: inputs.secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history — a secret committed and later "deleted" is still
+          # exposed in every clone; the scan must see all of it.
+          fetch-depth: 0
+
+      - name: gitleaks (full-history secret scan)
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+            detect --source /repo --no-banner --redact -v
+
+  dependency-review:
+    if: inputs.dependency-review && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
