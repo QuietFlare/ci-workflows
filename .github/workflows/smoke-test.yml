@@ -1,0 +1,44 @@
+name: Smoke Test
+
+# Runs the reusable pipelines against the tiny projects in test-fixtures/ on
+# every change to this repo — a broken pipeline can't merge, because it has to
+# actually WORK here first, end to end, before any consumer sees it.
+#
+# Coverage: pr-pipeline (which exercises gradle-test + ios-test + the job
+# wiring), ios-compliance, and security-scan. Deliberately NOT covered:
+#   - ai-review    (posts PR comments and needs a model API key)
+#   - codeql       (a long macOS analysis per change is not worth it here)
+#   - testflight / release-pipeline's upload (needs real App Store Connect
+#     secrets) — the release path is validated by a canary consumer instead;
+#     see RELEASING.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-pipeline:
+    uses: ./.github/workflows/pr-pipeline.yml
+    with:
+      project: test-fixtures/ios/Fixture.xcodeproj
+      scheme: Fixture
+      gradle-tasks: 'test'
+      gradle-working-directory: test-fixtures/gradle
+
+  compliance:
+    uses: ./.github/workflows/ios-compliance.yml
+    with:
+      privacy-manifest: test-fixtures/ios/Fixture/PrivacyInfo.xcprivacy
+      info-plist: test-fixtures/ios/Fixture/Info.plist
+
+  security-scan:
+    uses: ./.github/workflows/security-scan.yml

@@ -78,9 +78,11 @@ Pin the major tag and get fixes automatically:
 uses: QuietFlare/ci-workflows/.github/workflows/pr-pipeline.yml@v1
 ```
 
-- `v1` — floating major tag, moved forward for fixes and backward-compatible additions (same model as `actions/checkout`).
-- `v1.x.y` — immutable semver tags if you want zero surprise.
-- Breaking input changes only ever land in a new major (`v2`).
+- `v1` — floating major tag, moved forward for fixes and backward-compatible additions (same model as `actions/checkout`). Best for small fleets you operate yourself.
+- `v1.x.y` — immutable semver tags for zero surprise. Pair with Dependabot's `github-actions` ecosystem: it opens bump PRs, so each repo's own CI validates every upgrade before adoption — the right posture for large fleets and external consumers.
+- Breaking input changes only ever land in a new major (`v2`); existing pins keep working untouched.
+
+Every change to this repo must pass its own gate before it can reach you: `Self-check` lints all workflows (actionlint + zizmor), and `Smoke Test` runs the pipelines end-to-end against the real mini-projects in [`test-fixtures/`](test-fixtures/). Releases are canaried on a real consumer before the `v1` tag moves — the full process is in [RELEASING.md](RELEASING.md).
 
 ## License
 

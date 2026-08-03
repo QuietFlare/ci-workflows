@@ -97,6 +97,11 @@ on:
         required: false
         type: string
         default: '17'
+      gradle-working-directory:
+        description: Directory containing gradlew (for repos where the Gradle project is not at the root)
+        required: false
+        type: string
+        default: '.'
       # --- AI review (off by default) ---
       ai-review:
         description: Run the AI code review job (needs a model API key secret and pull-requests/issues write permission from the caller)
@@ -133,6 +138,7 @@ jobs:
     with:
       tasks: ${{ inputs.gradle-tasks }}
       java-version: ${{ inputs.gradle-java-version }}
+      working-directory: ${{ inputs.gradle-working-directory }}
 
   ios-test:
     uses: ./.github/workflows/ios-test.yml

@@ -1,0 +1,37 @@
+# XcodeGen spec for the iOS smoke-test fixture. The generated Fixture.xcodeproj
+# is COMMITTED so CI never needs XcodeGen installed — regenerate after editing
+# this file:  cd test-fixtures/ios && xcodegen generate
+name: Fixture
+options:
+  bundleIdPrefix: dev.ciworkflows
+  deploymentTarget:
+    iOS: '17.0'
+
+targets:
+  Fixture:
+    type: application
+    platform: iOS
+    sources: [Fixture]
+    info:
+      path: Fixture/Info.plist
+      properties:
+        UILaunchScreen: {}
+        # Doubles as the ios-compliance fixture: the encryption declaration
+        # the compliance workflow asserts on.
+        ITSAppUsesNonExemptEncryption: false
+
+  FixtureTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FixtureTests]
+    dependencies:
+      - target: Fixture
+
+schemes:
+  Fixture:
+    build:
+      targets:
+        Fixture: all
+        FixtureTests: all
+    test:
+      targets: [FixtureTests]
