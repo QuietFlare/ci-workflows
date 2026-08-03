@@ -21,6 +21,11 @@ name: CodeQL Swift (reusable)
 #       permissions:
 #         contents: read
 #         security-events: write   # only needed when upload: true
+#
+# NOTE: no `permissions:` block here on purpose — this workflow inherits the
+# caller's grant. Declaring security-events: write here would be statically
+# validated against every caller, breaking artifact-only (upload: false)
+# callers that sensibly grant contents: read alone.
 
 on:
   workflow_call:
@@ -64,10 +69,6 @@ on:
         required: false
         type: string
         default: ''
-
-permissions:
-  contents: read
-  security-events: write
 
 jobs:
   analyze:

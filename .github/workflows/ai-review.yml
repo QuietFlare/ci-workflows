@@ -15,6 +15,10 @@ name: AI Review (reusable)
 #   on:
 #     pull_request:
 #       types: [opened, synchronize, reopened]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#     issues: write
 #   jobs:
 #     review:
 #       uses: QuietFlare/ci-workflows/.github/workflows/ai-review.yml@v1
@@ -22,6 +26,12 @@ name: AI Review (reusable)
 #         extra-instructions: "This is a SwiftUI app; focus on state pitfalls."
 #       secrets:
 #         gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+#
+# NOTE: no `permissions:` block here on purpose — this workflow inherits the
+# caller's grant (shown above). Declaring the write permissions here would
+# force EVERY caller in the call graph to grant them at startup, even callers
+# that never run this job: GitHub validates requested permissions for the
+# whole graph statically, ignoring `if:` conditions.
 
 on:
   workflow_call:
@@ -63,11 +73,6 @@ on:
       openai-api-key:
         description: OpenAI key — required for openai/* models
         required: false
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
 
 jobs:
   review:

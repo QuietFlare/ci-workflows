@@ -17,6 +17,9 @@ name: Security Pipeline (reusable)
 #     contents: read
 #     security-events: write   # only needed when codeql: true with upload
 #   jobs:
+#
+# NOTE: this pipeline declares no `permissions:` of its own — it inherits the
+# caller's grant so callers stay the single place permissions are decided.
 #     security:
 #       uses: QuietFlare/ci-workflows/.github/workflows/security-pipeline.yml@v1
 #       with:
@@ -108,10 +111,6 @@ on:
         required: false
         type: string
         default: ''
-
-permissions:
-  contents: read
-  security-events: write
 
 jobs:
   scan:
