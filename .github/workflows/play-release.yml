@@ -1,0 +1,180 @@
+name: Play Release (reusable)
+
+# Test, build, sign and upload an Android App Bundle to a Google Play TESTING
+# track. Production is deliberately out of reach: this workflow refuses the
+# 'production' track, so shipping to real users always stays a human act in
+# the Play Console.
+#
+# Design notes:
+# - The signing keystore arrives as secrets and is materialised into the
+#   module's git-ignored keystore/ directory, in the exact shape the build
+#   reads (keystore.properties + the .jks). It is shredded afterwards, even
+#   on failure. Nothing signing-related ever lands in the repo.
+# - Verification tasks and the bundle build run in ONE Gradle invocation on
+#   the same runner, so the uploaded artifact is from the exact tested commit.
+# - The FIRST upload of a brand-new app cannot be done by API; do that one by
+#   hand in the Play Console. Every later upload can go through here.
+# - Play rejects a repeated versionCode — bump it per upload.
+#
+# One-time setup:
+#   1. Play Console → Setup → API access: link a Cloud project and create a
+#      service account; download its JSON key (offered exactly once).
+#   2. Play Console → Users and permissions: invite the service account's
+#      email with "Release apps to testing tracks" for the app.
+#   3. Caller repo secrets: the service-account JSON, the upload keystore
+#      base64-encoded, and its store password / key alias / key password.
+#
+# Minimal caller:
+#   jobs:
+#     release:
+#       uses: QuietFlare/ci-workflows/.github/workflows/play-release.yml@v1
+#       with:
+#         package-name: com.example.app
+#       secrets:
+#         play-service-account-json: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+#         upload-keystore-b64: ${{ secrets.UPLOAD_KEYSTORE_B64 }}
+#         keystore-store-password: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
+#         keystore-key-alias: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+#         keystore-key-password: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Android applicationId as registered on Play (e.g. com.example.app)
+        required: true
+        type: string
+      track:
+        description: >-
+          Play track to upload to. Testing tracks only — 'internal', 'alpha'
+          (the default closed track), 'beta', or a custom closed track's name.
+          'production' is refused by design.
+        required: false
+        type: string
+        default: 'alpha'
+      release-status:
+        description: >-
+          Play release status. 'completed' goes straight to the track's
+          testers; 'draft' stages the release for a manual rollout click.
+        required: false
+        type: string
+        default: 'completed'
+      module:
+        description: Gradle module directory containing the Android app
+        required: false
+        type: string
+        default: 'androidApp'
+      tasks:
+        description: >-
+          Gradle verification task(s) run before the bundle is built,
+          space-separated (e.g. ':shared:jvmTest :androidApp:lintDebug').
+        required: false
+        type: string
+        default: 'test'
+      bundle-task:
+        description: Gradle task producing the signed release bundle
+        required: false
+        type: string
+        default: ':androidApp:bundleRelease'
+      java-version:
+        description: JDK version to install
+        required: false
+        type: string
+        default: '17'
+      java-distribution:
+        description: JDK distribution (actions/setup-java name)
+        required: false
+        type: string
+        default: 'temurin'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      play-service-account-json:
+        description: JSON key of a service account allowed to release to testing tracks
+        required: true
+      upload-keystore-b64:
+        description: The upload keystore (.jks), base64-encoded
+        required: true
+      keystore-store-password:
+        description: Keystore store password
+        required: true
+      keystore-key-alias:
+        description: Signing key alias
+        required: true
+      keystore-key-password:
+        description: Signing key password
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Refuse the production track
+        if: inputs.track == 'production'
+        run: |
+          echo "::error::play-release.yml only targets testing tracks. Promote to production by hand in the Play Console."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle (cache + wrapper validation)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Materialise the upload keystore
+        env:
+          UPLOAD_KEYSTORE_B64: ${{ secrets.upload-keystore-b64 }}
+          KEYSTORE_STORE_PASSWORD: ${{ secrets.keystore-store-password }}
+          KEYSTORE_KEY_ALIAS: ${{ secrets.keystore-key-alias }}
+          KEYSTORE_KEY_PASSWORD: ${{ secrets.keystore-key-password }}
+          MODULE: ${{ inputs.module }}
+        run: |
+          mkdir -p "$MODULE/keystore"
+          printf '%s' "$UPLOAD_KEYSTORE_B64" | base64 -d > "$MODULE/keystore/upload.jks"
+          {
+            echo "storeFile=$PWD/$MODULE/keystore/upload.jks"
+            echo "storePassword=$KEYSTORE_STORE_PASSWORD"
+            echo "keyAlias=$KEYSTORE_KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_KEY_PASSWORD"
+          } > "$MODULE/keystore/keystore.properties"
+
+      - name: Test, then build the signed bundle
+        env:
+          TASKS: ${{ inputs.tasks }}
+          BUNDLE_TASK: ${{ inputs.bundle-task }}
+        # Word-splitting on $TASKS is deliberate — it carries multiple tasks.
+        run: |
+          # shellcheck disable=SC2086
+          ./gradlew $TASKS "$BUNDLE_TASK"
+
+      - name: Upload to Play (${{ inputs.track }})
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.play-service-account-json }}
+          packageName: ${{ inputs.package-name }}
+          releaseFiles: ${{ inputs.module }}/build/outputs/bundle/release/*.aab
+          track: ${{ inputs.track }}
+          status: ${{ inputs.release-status }}
+
+      - name: Shred signing material
+        if: always()
+        run: rm -rf "${{ inputs.module }}/keystore"
+
+      - name: Upload test reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-release-reports
+          path: '**/build/reports/'
+          if-no-files-found: ignore
