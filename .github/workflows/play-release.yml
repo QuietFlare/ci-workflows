@@ -1,0 +1,243 @@
+name: Play Release (reusable)
+
+# Test, build, sign and upload an Android App Bundle to a Google Play TESTING
+# track. Production is deliberately out of reach: this workflow refuses the
+# 'production' track, so shipping to real users always stays a human act in
+# the Play Console.
+#
+# Design notes:
+# - The signing keystore arrives as secrets and is materialised into the
+#   module's git-ignored keystore/ directory, in the exact shape the build
+#   reads (keystore.properties + the .jks). It is shredded afterwards, even
+#   on failure. Nothing signing-related ever lands in the repo.
+# - Verification tasks and the bundle build run in ONE Gradle invocation on
+#   the same runner, so the uploaded artifact is from the exact tested commit.
+# - The FIRST upload of a brand-new app cannot be done by API; do that one by
+#   hand in the Play Console. Every later upload can go through here.
+# - Play rejects a repeated versionCode — bump it per upload.
+#
+# One-time setup:
+#   1. Play Console → Setup → API access: link a Cloud project and create a
+#      service account (no Cloud IAM roles needed).
+#   2. Play Console → Users and permissions: invite the service account's
+#      email with "Release apps to testing tracks" for the app — and nothing
+#      more: withholding the production permission enforces human-only
+#      production at Google's end, not just in this workflow.
+#   3. Auth, pick one:
+#      - PREFERRED — Workload Identity Federation: create a workload identity
+#        pool + GitHub OIDC provider, allow the caller repo to impersonate the
+#        service account, then pass the workload-identity-provider and
+#        service-account secrets (caller also grants `id-token: write`). No
+#        key exists anywhere, and being secrets, the identifiers stay masked
+#        in public Actions logs.
+#      - Fallback — download the service account's JSON key and store it as
+#        the play-service-account-json secret.
+#   4. Caller repo secrets for signing (always): the upload keystore
+#      base64-encoded, and its store password / key alias / key password.
+#
+# Minimal caller:
+#   jobs:
+#     release:
+#       uses: QuietFlare/ci-workflows/.github/workflows/play-release.yml@v1
+#       with:
+#         package-name: com.example.app
+#       secrets:
+#         workload-identity-provider: ${{ secrets.PLAY_WIF_PROVIDER }}
+#         service-account: ${{ secrets.PLAY_SA_EMAIL }}
+#         upload-keystore-b64: ${{ secrets.UPLOAD_KEYSTORE_B64 }}
+#         keystore-store-password: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
+#         keystore-key-alias: ${{ secrets.KEYSTORE_KEY_ALIAS }}
+#         keystore-key-password: ${{ secrets.KEYSTORE_KEY_PASSWORD }}
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Android applicationId as registered on Play (e.g. com.example.app)
+        required: true
+        type: string
+      track:
+        description: >-
+          Play track to upload to. Testing tracks only — 'internal', 'alpha'
+          (the default closed track), 'beta', or a custom closed track's name.
+          'production' is refused by design.
+        required: false
+        type: string
+        default: 'alpha'
+      release-status:
+        description: >-
+          Play release status. 'completed' goes straight to the track's
+          testers; 'draft' stages the release for a manual rollout click.
+        required: false
+        type: string
+        default: 'completed'
+      module:
+        description: Gradle module directory containing the Android app
+        required: false
+        type: string
+        default: 'androidApp'
+      tasks:
+        description: >-
+          Gradle verification task(s) run before the bundle is built,
+          space-separated (e.g. ':shared:jvmTest :androidApp:lintDebug').
+        required: false
+        type: string
+        default: 'test'
+      bundle-task:
+        description: Gradle task producing the signed release bundle
+        required: false
+        type: string
+        default: ':androidApp:bundleRelease'
+      java-version:
+        description: JDK version to install
+        required: false
+        type: string
+        default: '17'
+      java-distribution:
+        description: JDK distribution (actions/setup-java name)
+        required: false
+        type: string
+        default: 'temurin'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      workload-identity-provider:
+        description: >-
+          Workload Identity Federation provider resource name
+          (projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER).
+          The Google-recommended auth: no long-lived key exists anywhere. When
+          set, also set `service-account` and grant `id-token: write` in the
+          caller. Passed as a secret (not an input) so the value is masked in
+          the public Actions logs of open-source callers.
+        required: false
+      service-account:
+        description: Service-account email to impersonate via Workload Identity Federation
+        required: false
+      play-service-account-json:
+        description: >-
+          JSON key of a service account allowed to release to testing tracks.
+          Fallback auth only — prefer Workload Identity Federation, which
+          needs no stored key.
+        required: false
+      upload-keystore-b64:
+        description: The upload keystore (.jks), base64-encoded
+        required: true
+      keystore-store-password:
+        description: Keystore store password
+        required: true
+      keystore-key-alias:
+        description: Signing key alias
+        required: true
+      keystore-key-password:
+        description: Signing key password
+        required: true
+
+permissions:
+  contents: read
+  # For Workload Identity Federation. Only takes effect when the CALLER also
+  # grants it; harmless for key-based callers.
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ${{ inputs.runner }}
+    # Secrets are not readable in step `if:` conditions; job env is. The values
+    # stay masked in logs either way.
+    env:
+      WIF_PROVIDER: ${{ secrets.workload-identity-provider }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.service-account }}
+    steps:
+      - name: Refuse the production track
+        if: inputs.track == 'production'
+        run: |
+          echo "::error::play-release.yml only targets testing tracks. Promote to production by hand in the Play Console."
+          exit 1
+
+      - name: Require an auth method
+        env:
+          KEY: ${{ secrets.play-service-account-json }}
+        run: |
+          if [ -z "$WIF_PROVIDER" ] && [ -z "$KEY" ]; then
+            echo "::error::No Play auth configured: set the workload-identity-provider secret (preferred) or play-service-account-json."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google (Workload Identity Federation)
+        if: env.WIF_PROVIDER != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: ${{ inputs.java-distribution }}
+          java-version: ${{ inputs.java-version }}
+
+      - name: Set up Gradle (cache + wrapper validation)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Materialise the upload keystore
+        env:
+          UPLOAD_KEYSTORE_B64: ${{ secrets.upload-keystore-b64 }}
+          KEYSTORE_STORE_PASSWORD: ${{ secrets.keystore-store-password }}
+          KEYSTORE_KEY_ALIAS: ${{ secrets.keystore-key-alias }}
+          KEYSTORE_KEY_PASSWORD: ${{ secrets.keystore-key-password }}
+          MODULE: ${{ inputs.module }}
+        run: |
+          mkdir -p "$MODULE/keystore"
+          printf '%s' "$UPLOAD_KEYSTORE_B64" | base64 -d > "$MODULE/keystore/upload.jks"
+          {
+            echo "storeFile=$PWD/$MODULE/keystore/upload.jks"
+            echo "storePassword=$KEYSTORE_STORE_PASSWORD"
+            echo "keyAlias=$KEYSTORE_KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_KEY_PASSWORD"
+          } > "$MODULE/keystore/keystore.properties"
+
+      - name: Test, then build the signed bundle
+        env:
+          TASKS: ${{ inputs.tasks }}
+          BUNDLE_TASK: ${{ inputs.bundle-task }}
+        # Word-splitting on $TASKS is deliberate — it carries multiple tasks.
+        run: |
+          # shellcheck disable=SC2086
+          ./gradlew $TASKS "$BUNDLE_TASK"
+
+      # Two upload steps, one per auth mode: the action reads Application
+      # Default Credentials (set up by the auth step) when no key is passed.
+      - name: Upload to Play (${{ inputs.track }})
+        if: env.WIF_PROVIDER != ''
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          packageName: ${{ inputs.package-name }}
+          releaseFiles: ${{ inputs.module }}/build/outputs/bundle/release/*.aab
+          track: ${{ inputs.track }}
+          status: ${{ inputs.release-status }}
+
+      - name: Upload to Play (${{ inputs.track }}, key auth)
+        if: env.WIF_PROVIDER == ''
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.play-service-account-json }}
+          packageName: ${{ inputs.package-name }}
+          releaseFiles: ${{ inputs.module }}/build/outputs/bundle/release/*.aab
+          track: ${{ inputs.track }}
+          status: ${{ inputs.release-status }}
+
+      - name: Shred signing material
+        if: always()
+        run: rm -rf "${{ inputs.module }}/keystore"
+
+      - name: Upload test reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-release-reports
+          path: '**/build/reports/'
+          if-no-files-found: ignore
