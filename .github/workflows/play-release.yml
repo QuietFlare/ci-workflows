@@ -26,9 +26,10 @@ name: Play Release (reusable)
 #   3. Auth, pick one:
 #      - PREFERRED — Workload Identity Federation: create a workload identity
 #        pool + GitHub OIDC provider, allow the caller repo to impersonate the
-#        service account, then set the workload-identity-provider and
-#        service-account inputs (caller also grants `id-token: write`). No key
-#        exists anywhere.
+#        service account, then pass the workload-identity-provider and
+#        service-account secrets (caller also grants `id-token: write`). No
+#        key exists anywhere, and being secrets, the identifiers stay masked
+#        in public Actions logs.
 #      - Fallback — download the service account's JSON key and store it as
 #        the play-service-account-json secret.
 #   4. Caller repo secrets for signing (always): the upload keystore
@@ -41,7 +42,8 @@ name: Play Release (reusable)
 #       with:
 #         package-name: com.example.app
 #       secrets:
-#         play-service-account-json: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+#         workload-identity-provider: ${{ secrets.PLAY_WIF_PROVIDER }}
+#         service-account: ${{ secrets.PLAY_SA_EMAIL }}
 #         upload-keystore-b64: ${{ secrets.UPLOAD_KEYSTORE_B64 }}
 #         keystore-store-password: ${{ secrets.KEYSTORE_STORE_PASSWORD }}
 #         keystore-key-alias: ${{ secrets.KEYSTORE_KEY_ALIAS }}
@@ -54,21 +56,6 @@ on:
         description: Android applicationId as registered on Play (e.g. com.example.app)
         required: true
         type: string
-      workload-identity-provider:
-        description: >-
-          Workload Identity Federation provider resource name
-          (projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER).
-          The Google-recommended auth: no long-lived key exists anywhere. When set,
-          the caller must also set `service-account` and grant `id-token: write`,
-          and the play-service-account-json secret is not needed.
-        required: false
-        type: string
-        default: ''
-      service-account:
-        description: Service-account email to impersonate via Workload Identity Federation
-        required: false
-        type: string
-        default: ''
       track:
         description: >-
           Play track to upload to. Testing tracks only — 'internal', 'alpha'
@@ -117,11 +104,23 @@ on:
         type: string
         default: 'ubuntu-latest'
     secrets:
+      workload-identity-provider:
+        description: >-
+          Workload Identity Federation provider resource name
+          (projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER).
+          The Google-recommended auth: no long-lived key exists anywhere. When
+          set, also set `service-account` and grant `id-token: write` in the
+          caller. Passed as a secret (not an input) so the value is masked in
+          the public Actions logs of open-source callers.
+        required: false
+      service-account:
+        description: Service-account email to impersonate via Workload Identity Federation
+        required: false
       play-service-account-json:
         description: >-
           JSON key of a service account allowed to release to testing tracks.
-          Fallback auth only — prefer Workload Identity Federation via the
-          workload-identity-provider input, which needs no stored key.
+          Fallback auth only — prefer Workload Identity Federation, which
+          needs no stored key.
         required: false
       upload-keystore-b64:
         description: The upload keystore (.jks), base64-encoded
@@ -145,6 +144,11 @@ permissions:
 jobs:
   release:
     runs-on: ${{ inputs.runner }}
+    # Secrets are not readable in step `if:` conditions; job env is. The values
+    # stay masked in logs either way.
+    env:
+      WIF_PROVIDER: ${{ secrets.workload-identity-provider }}
+      WIF_SERVICE_ACCOUNT: ${{ secrets.service-account }}
     steps:
       - name: Refuse the production track
         if: inputs.track == 'production'
@@ -152,24 +156,23 @@ jobs:
           echo "::error::play-release.yml only targets testing tracks. Promote to production by hand in the Play Console."
           exit 1
 
-      - name: Require exactly one auth method
+      - name: Require an auth method
         env:
-          WIF: ${{ inputs.workload-identity-provider }}
           KEY: ${{ secrets.play-service-account-json }}
         run: |
-          if [ -z "$WIF" ] && [ -z "$KEY" ]; then
-            echo "::error::No Play auth configured: set workload-identity-provider (preferred) or the play-service-account-json secret."
+          if [ -z "$WIF_PROVIDER" ] && [ -z "$KEY" ]; then
+            echo "::error::No Play auth configured: set the workload-identity-provider secret (preferred) or play-service-account-json."
             exit 1
           fi
 
       - uses: actions/checkout@v4
 
       - name: Authenticate to Google (Workload Identity Federation)
-        if: inputs.workload-identity-provider != ''
+        if: env.WIF_PROVIDER != ''
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ inputs.workload-identity-provider }}
-          service_account: ${{ inputs.service-account }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
 
       - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@v4
@@ -209,7 +212,7 @@ jobs:
       # Two upload steps, one per auth mode: the action reads Application
       # Default Credentials (set up by the auth step) when no key is passed.
       - name: Upload to Play (${{ inputs.track }})
-        if: inputs.workload-identity-provider != ''
+        if: env.WIF_PROVIDER != ''
         uses: r0adkll/upload-google-play@v1.1.3
         with:
           packageName: ${{ inputs.package-name }}
@@ -218,7 +221,7 @@ jobs:
           status: ${{ inputs.release-status }}
 
       - name: Upload to Play (${{ inputs.track }}, key auth)
-        if: inputs.workload-identity-provider == ''
+        if: env.WIF_PROVIDER == ''
         uses: r0adkll/upload-google-play@v1.1.3
         with:
           serviceAccountJsonPlainText: ${{ secrets.play-service-account-json }}
