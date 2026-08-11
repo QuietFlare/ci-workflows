@@ -18,10 +18,20 @@ name: Play Release (reusable)
 #
 # One-time setup:
 #   1. Play Console → Setup → API access: link a Cloud project and create a
-#      service account; download its JSON key (offered exactly once).
+#      service account (no Cloud IAM roles needed).
 #   2. Play Console → Users and permissions: invite the service account's
-#      email with "Release apps to testing tracks" for the app.
-#   3. Caller repo secrets: the service-account JSON, the upload keystore
+#      email with "Release apps to testing tracks" for the app — and nothing
+#      more: withholding the production permission enforces human-only
+#      production at Google's end, not just in this workflow.
+#   3. Auth, pick one:
+#      - PREFERRED — Workload Identity Federation: create a workload identity
+#        pool + GitHub OIDC provider, allow the caller repo to impersonate the
+#        service account, then set the workload-identity-provider and
+#        service-account inputs (caller also grants `id-token: write`). No key
+#        exists anywhere.
+#      - Fallback — download the service account's JSON key and store it as
+#        the play-service-account-json secret.
+#   4. Caller repo secrets for signing (always): the upload keystore
 #      base64-encoded, and its store password / key alias / key password.
 #
 # Minimal caller:
@@ -44,6 +54,21 @@ on:
         description: Android applicationId as registered on Play (e.g. com.example.app)
         required: true
         type: string
+      workload-identity-provider:
+        description: >-
+          Workload Identity Federation provider resource name
+          (projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER).
+          The Google-recommended auth: no long-lived key exists anywhere. When set,
+          the caller must also set `service-account` and grant `id-token: write`,
+          and the play-service-account-json secret is not needed.
+        required: false
+        type: string
+        default: ''
+      service-account:
+        description: Service-account email to impersonate via Workload Identity Federation
+        required: false
+        type: string
+        default: ''
       track:
         description: >-
           Play track to upload to. Testing tracks only — 'internal', 'alpha'
@@ -93,8 +118,11 @@ on:
         default: 'ubuntu-latest'
     secrets:
       play-service-account-json:
-        description: JSON key of a service account allowed to release to testing tracks
-        required: true
+        description: >-
+          JSON key of a service account allowed to release to testing tracks.
+          Fallback auth only — prefer Workload Identity Federation via the
+          workload-identity-provider input, which needs no stored key.
+        required: false
       upload-keystore-b64:
         description: The upload keystore (.jks), base64-encoded
         required: true
@@ -110,6 +138,9 @@ on:
 
 permissions:
   contents: read
+  # For Workload Identity Federation. Only takes effect when the CALLER also
+  # grants it; harmless for key-based callers.
+  id-token: write
 
 jobs:
   release:
@@ -121,7 +152,24 @@ jobs:
           echo "::error::play-release.yml only targets testing tracks. Promote to production by hand in the Play Console."
           exit 1
 
+      - name: Require exactly one auth method
+        env:
+          WIF: ${{ inputs.workload-identity-provider }}
+          KEY: ${{ secrets.play-service-account-json }}
+        run: |
+          if [ -z "$WIF" ] && [ -z "$KEY" ]; then
+            echo "::error::No Play auth configured: set workload-identity-provider (preferred) or the play-service-account-json secret."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
+
+      - name: Authenticate to Google (Workload Identity Federation)
+        if: inputs.workload-identity-provider != ''
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ inputs.workload-identity-provider }}
+          service_account: ${{ inputs.service-account }}
 
       - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@v4
@@ -158,7 +206,19 @@ jobs:
           # shellcheck disable=SC2086
           ./gradlew $TASKS "$BUNDLE_TASK"
 
+      # Two upload steps, one per auth mode: the action reads Application
+      # Default Credentials (set up by the auth step) when no key is passed.
       - name: Upload to Play (${{ inputs.track }})
+        if: inputs.workload-identity-provider != ''
+        uses: r0adkll/upload-google-play@v1.1.3
+        with:
+          packageName: ${{ inputs.package-name }}
+          releaseFiles: ${{ inputs.module }}/build/outputs/bundle/release/*.aab
+          track: ${{ inputs.track }}
+          status: ${{ inputs.release-status }}
+
+      - name: Upload to Play (${{ inputs.track }}, key auth)
+        if: inputs.workload-identity-provider == ''
         uses: r0adkll/upload-google-play@v1.1.3
         with:
           serviceAccountJsonPlainText: ${{ secrets.play-service-account-json }}
