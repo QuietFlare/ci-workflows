@@ -103,6 +103,16 @@ on:
         required: false
         type: string
         default: 'ubuntu-latest'
+      apk-task:
+        description: >-
+          Optional Gradle task producing a signed release APK, which is then
+          attached to a GitHub release created on the pushed tag — the artifact
+          F-Droid byte-compares against for reproducible-build verification.
+          Empty (the default) disables both steps. When set, the caller must
+          also grant `contents: write`.
+        required: false
+        type: string
+        default: ''
     secrets:
       workload-identity-provider:
         description: >-
@@ -136,7 +146,10 @@ on:
         required: true
 
 permissions:
-  contents: read
+  # `write` is needed only by the optional apk-task GitHub-release step, and
+  # only takes effect when the CALLER also grants it — callers that leave
+  # apk-task unset can (and should) keep granting `contents: read`.
+  contents: write
   # For Workload Identity Federation. Only takes effect when the CALLER also
   # grants it; harmless for key-based callers.
   id-token: write
@@ -233,6 +246,27 @@ jobs:
           releaseFiles: ${{ inputs.module }}/build/outputs/bundle/release/*.aab
           track: ${{ inputs.track }}
           status: ${{ inputs.release-status }}
+
+      # The two optional apk-task steps. The APK is built AFTER the bundle went
+      # to Play so a GitHub-release failure can never block the Play upload.
+      - name: Build the signed APK
+        if: inputs.apk-task != ''
+        env:
+          APK_TASK: ${{ inputs.apk-task }}
+        run: ./gradlew "$APK_TASK"
+
+      - name: Publish the APK to a GitHub release on the tag
+        if: inputs.apk-task != '' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODULE: ${{ inputs.module }}
+        # --verify-tag refuses to invent a new tag if the ref somehow drifted.
+        run: |
+          apk=$(ls "$MODULE"/build/outputs/apk/release/*-release.apk)
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Signed release APK for F-Droid reproducible-build verification." \
+            "$apk"
 
       - name: Shred signing material
         if: always()
