@@ -1,0 +1,27 @@
+# CI for a Python project. Copy to .github/workflows/ci.yml.
+#
+# Runs the suite across three Python versions on Ubuntu, which is the cheap
+# tier: on a public repo this is free, on a private one it bills at 1x.
+# Nothing is installed unless you name a requirements file.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: QuietFlare/ci-workflows/.github/workflows/python-test.yml@v1
+    with:
+      test-command: 'python3 -m unittest discover -s tests'
+      # For a project with dependencies:
+      # requirements-file: requirements.txt
