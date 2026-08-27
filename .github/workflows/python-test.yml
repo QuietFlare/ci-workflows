@@ -1,0 +1,79 @@
+name: Python Test (reusable)
+
+# Run a Python test suite on cheap Ubuntu runners, across a version matrix.
+#
+# Design notes:
+# - Stdlib-first: with no requirements file named, the job installs nothing,
+#   so a dependency-free project tests in seconds.
+# - The version matrix is a JSON list. It reads oddly in YAML, but it is the
+#   only shape workflow_call can pass into a matrix.
+# - No report artifacts: unittest and pytest print failures into the job
+#   log, and that is the only place anyone reads them.
+#
+# Minimal caller:
+#   jobs:
+#     test:
+#       uses: QuietFlare/ci-workflows/.github/workflows/python-test.yml@v1
+#       with:
+#         test-command: 'python3 -m unittest discover -s tests'
+
+on:
+  workflow_call:
+    inputs:
+      test-command:
+        description: Command that runs the suite
+        required: false
+        type: string
+        default: 'python3 -m unittest discover'
+      python-versions:
+        description: JSON list of Python versions to test against
+        required: false
+        type: string
+        default: '["3.11", "3.12", "3.13"]'
+      requirements-file:
+        description: Requirements file to install first (empty installs nothing)
+        required: false
+        type: string
+        default: ''
+      working-directory:
+        description: Directory containing the suite (for repos where the Python project is not at the root)
+        required: false
+        type: string
+        default: '.'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ${{ inputs.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(inputs.python-versions) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install requirements
+        if: inputs.requirements-file != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          REQUIREMENTS: ${{ inputs.requirements-file }}
+        run: pip install -r "$REQUIREMENTS"
+
+      - name: Run the suite
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        # eval is deliberate: the caller's command is a full shell line.
+        run: eval "$TEST_COMMAND"

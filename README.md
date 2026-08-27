@@ -29,7 +29,7 @@ Three **pipelines** — the batteries-included entry points:
 | [`release-pipeline.yml`](.github/workflows/release-pipeline.yml) | the same tests, then archive + upload to **TestFlight** via App Store Connect cloud signing | version tags (`v*`) |
 | [`security-pipeline.yml`](.github/workflows/security-pipeline.yml) | secret scan + dependency review + App Store compliance preflight (all Ubuntu, seconds-cheap) → opt-in CodeQL | `pull_request` + weekly schedule |
 
-Seven **building blocks** — call them directly when you want a different composition:
+Eight **building blocks** — call them directly when you want a different composition:
 
 | Workflow | Runner | What it does |
 |---|---|---|
@@ -40,8 +40,9 @@ Seven **building blocks** — call them directly when you want a different compo
 | [`testflight.yml`](.github/workflows/testflight.yml) | macOS | Archive + TestFlight upload using an App Store Connect API key — no certificates in the repo |
 | [`security-scan.yml`](.github/workflows/security-scan.yml) | Ubuntu | [gitleaks](https://github.com/gitleaks/gitleaks) full-history secret scan + GitHub dependency review of PR-introduced dependencies |
 | [`ios-compliance.yml`](.github/workflows/ios-compliance.yml) | Ubuntu | App Store preflight: privacy manifest present, `ITSAppUsesNonExemptEncryption` declared, no signing material (.p8/.p12/.mobileprovision) committed |
+| [`python-test.yml`](.github/workflows/python-test.yml) | Ubuntu | Python test suite across a version matrix, stdlib-first: installs nothing unless a requirements file is named |
 
-Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), and a [scheduled CodeQL scan](examples/codeql.yml).
+Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), and a [Python test matrix](examples/python-ci.yml).
 
 Every input is documented inline in each workflow's `workflow_call` block, with a minimal caller in its header comment.
 
