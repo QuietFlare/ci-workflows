@@ -1,0 +1,126 @@
+name: Python Audit (reusable)
+
+# Audits a Python project's pinned dependencies for known vulnerabilities,
+# using pip-audit (maintained by the Python Packaging Authority).
+#
+# Why this is separate from security-scan.yml: that workflow is language
+# agnostic and runs on every repo. This one installs Python and uv, which
+# would be dead weight for the Swift and Gradle callers.
+#
+# Why pip-audit rather than a uv.lock-native tool: GitHub's dependency
+# graph does not read uv.lock yet, so dependency review finds nothing in a
+# uv project. The uv-lock-native scanners are single-maintainer projects,
+# which is a poor dependency for shared CI that every repo runs. pip-audit
+# is PyPA-maintained, and `uv export` gives it the fully pinned transitive
+# set from the lockfile, so nothing is lost by going through it.
+#
+# ⚠️ pip-audit builds a resolver environment with the interpreter it is
+# running under. If that interpreter is older than the project's
+# requires-python, the failure reads "No matching distribution found",
+# which points at the package rather than at the Python version. Hence
+# python-version is an explicit input, and it must be at least the
+# project's own floor.
+#
+# Caller:
+#   jobs:
+#     audit:
+#       uses: QuietFlare/ci-workflows/.github/workflows/python-audit.yml@v1
+#       with:
+#         python-version: '3.13'
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: Interpreter to audit under. Must be at least the project's requires-python floor.
+        required: false
+        type: string
+        default: '3.13'
+      requirements-file:
+        description: Requirements file to audit. Empty exports it from uv.lock instead.
+        required: false
+        type: string
+        default: ''
+      working-directory:
+        description: Directory holding the project, for repos where it is not at the root
+        required: false
+        type: string
+        default: '.'
+      vulnerability-service:
+        description: Advisory source (pypi or osv)
+        required: false
+        type: string
+        default: 'pypi'
+      ignore-vulns:
+        description: Space-separated advisory IDs to ignore, for accepted risks with no fix available
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+
+      - name: Resolve the dependency set
+        id: resolve
+        # Inputs reach the shell as environment variables, never as
+        # template expansions, so a caller cannot inject shell here.
+        env:
+          REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "$REQUIREMENTS_FILE" ]; then
+            echo "file=$REQUIREMENTS_FILE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ ! -f uv.lock ]; then
+            echo "::error::No requirements-file given and no uv.lock found in $WORKING_DIRECTORY."
+            exit 1
+          fi
+
+          # --no-emit-project excludes the project itself, which is not on
+          # an index and would fail to resolve.
+          uv export --no-emit-project --format requirements-txt > audit-requirements.txt
+          echo "file=audit-requirements.txt" >> "$GITHUB_OUTPUT"
+          echo "Auditing $(grep -c '^[a-zA-Z0-9]' audit-requirements.txt) pinned packages."
+
+      - name: Audit with pip-audit
+        env:
+          PYTHON_VERSION: ${{ inputs.python-version }}
+          REQUIREMENTS: ${{ steps.resolve.outputs.file }}
+          SERVICE: ${{ inputs.vulnerability-service }}
+          IGNORE_VULNS: ${{ inputs.ignore-vulns }}
+        run: |
+          # --no-deps because the export is already the complete transitive
+          # set. Resolving again would only invite a different answer.
+          ignore_args=""
+          for advisory in $IGNORE_VULNS; do
+            ignore_args="$ignore_args --ignore-vuln $advisory"
+          done
+
+          # shellcheck disable=SC2086  # ignore_args is intentionally split
+          uv tool run --python "$PYTHON_VERSION" \
+            pip-audit@2.10.1 \
+            --requirement "$REQUIREMENTS" \
+            --no-deps \
+            --vulnerability-service "$SERVICE" \
+            --progress-spinner off \
+            $ignore_args
