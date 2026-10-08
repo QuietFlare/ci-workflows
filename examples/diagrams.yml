@@ -1,0 +1,23 @@
+# Keep rendered diagrams current. Copy to .github/workflows/diagrams.yml.
+#
+# Runs only on a pull request that changes a .excalidraw source, renders
+# every source to the PNG beside it, and commits the PNGs to the branch.
+# No browser, no macOS minutes. Rendering and the commit live in the shared
+# workflow; only the trigger is here.
+name: diagrams
+
+on:
+  pull_request:
+    paths: ["docs/*.excalidraw"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    uses: QuietFlare/ci-workflows/.github/workflows/excalidraw-render.yml@v1
+    # Defaults render docs/*.excalidraw at scale 2. To change either:
+    # with:
+    #   sources: 'diagrams/*.excalidraw'
+    #   scale: 3

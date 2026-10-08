@@ -29,7 +29,7 @@ Three **pipelines** — the batteries-included entry points:
 | [`release-pipeline.yml`](.github/workflows/release-pipeline.yml) | the same tests, then archive + upload to **TestFlight** via App Store Connect cloud signing | version tags (`v*`) |
 | [`security-pipeline.yml`](.github/workflows/security-pipeline.yml) | secret scan + dependency review + App Store compliance preflight (all Ubuntu, seconds-cheap) → opt-in CodeQL | `pull_request` + weekly schedule |
 
-Eight **building blocks** — call them directly when you want a different composition:
+Nine **building blocks** — call them directly when you want a different composition:
 
 | Workflow | Runner | What it does |
 |---|---|---|
@@ -41,8 +41,9 @@ Eight **building blocks** — call them directly when you want a different compo
 | [`security-scan.yml`](.github/workflows/security-scan.yml) | Ubuntu | [gitleaks](https://github.com/gitleaks/gitleaks) full-history secret scan + GitHub dependency review of PR-introduced dependencies |
 | [`ios-compliance.yml`](.github/workflows/ios-compliance.yml) | Ubuntu | App Store preflight: privacy manifest present, `ITSAppUsesNonExemptEncryption` declared, no signing material (.p8/.p12/.mobileprovision) committed |
 | [`python-test.yml`](.github/workflows/python-test.yml) | Ubuntu | Python test suite across a version matrix, stdlib-first: installs nothing unless a requirements file is named |
+| [`excalidraw-render.yml`](.github/workflows/excalidraw-render.yml) | Ubuntu | Renders `.excalidraw` sources to PNG without a browser and commits them to the PR branch, so a diagram in the README never lags its source |
 
-Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), and a [Python test matrix](examples/python-ci.yml).
+Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), a [Python test matrix](examples/python-ci.yml), and [diagrams that re-render on change](examples/diagrams.yml).
 
 Every input is documented inline in each workflow's `workflow_call` block, with a minimal caller in its header comment.
 

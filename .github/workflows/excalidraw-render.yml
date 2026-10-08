@@ -1,0 +1,145 @@
+name: Excalidraw Render (reusable)
+
+# Keep rendered PNGs in step with their .excalidraw sources, with no browser.
+#
+# Renders every source matching `sources` to the PNG beside it and commits
+# the PNGs back to the pull request branch when they changed. A pull request
+# from a fork cannot be pushed to; there the job attaches the PNGs as an
+# artifact and fails, so the author can commit them by hand.
+#
+# Design notes:
+# - Server-side renderer, pinned. The browser-driven exporters scrape
+#   excalidraw.com and break whenever its UI moves. This one runs
+#   Excalidraw's own export code under jsdom and rasterises with resvg.
+#   Its output is byte-identical from run to run, so an unchanged diagram
+#   makes no commit.
+# - Helvetica becomes Liberation Sans. The editor's Helvetica (font 2) ships
+#   with no font file, and the renderer would fall back to a monospace face.
+#   Liberation Sans (font 9) is the metric-compatible face Excalidraw itself
+#   falls back to, so the PNG matches the editor's own export. The swap is
+#   made on a copy; the source file is untouched.
+# - The commit is pushed with the workflow's own token, so it starts no
+#   further runs on the branch. Tests ran on the commit before it, and a
+#   PNG changes nothing they cover. A repo that requires status checks on
+#   the head commit should pass a PAT as `push-token` instead.
+#
+# Minimal caller (triggers live in your repo):
+#   on:
+#     pull_request:
+#       paths: ["docs/*.excalidraw"]
+#   permissions:
+#     contents: write
+#   jobs:
+#     diagrams:
+#       uses: QuietFlare/ci-workflows/.github/workflows/excalidraw-render.yml@v1
+
+on:
+  workflow_call:
+    inputs:
+      sources:
+        description: Shell glob of .excalidraw files to render; each PNG lands beside its source
+        required: false
+        type: string
+        default: 'docs/*.excalidraw'
+      scale:
+        description: Export scale, 1 to 3, as in the editor's export dialog
+        required: false
+        type: number
+        default: 2
+      commit-message:
+        description: Message for the commit that carries the rendered PNGs
+        required: false
+        type: string
+        default: 'docs: render diagrams'
+      renderer-version:
+        description: Pinned version of @phenchua29/excalidraw-cli
+        required: false
+        type: string
+        default: '1.3.6'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      push-token:
+        description: Token to push with instead of the workflow's own, when the pushed commit must start other workflows
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          token: ${{ secrets.push-token || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Render the diagrams
+        env:
+          SOURCES: ${{ inputs.sources }}
+          SCALE: ${{ inputs.scale }}
+          RENDERER: ${{ inputs.renderer-version }}
+        run: |
+          shopt -s nullglob
+          found=0
+          # shellcheck disable=SC2086 # the glob is the point
+          for src in $SOURCES; do
+            found=1
+            copy="${src%.excalidraw}.render.excalidraw"
+            sed -E 's/"fontFamily": ?2([,}])/"fontFamily": 9\1/g' "$src" > "$copy"
+            npx --yes "@phenchua29/excalidraw-cli@$RENDERER" convert "$copy" \
+              --format png --scale "$SCALE" -o "${src%.excalidraw}.png"
+            rm -f "$copy"
+          done
+          if [ "$found" = 0 ]; then
+            echo "::error::No file matches '$SOURCES'"
+            exit 1
+          fi
+
+      - name: Commit the rendered diagrams
+        id: commit
+        env:
+          SOURCES: ${{ inputs.sources }}
+          MESSAGE: ${{ inputs.commit-message }}
+          FROM_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          shopt -s nullglob
+          # shellcheck disable=SC2086 # the glob is the point
+          for src in $SOURCES; do
+            git add -- "${src%.excalidraw}.png"
+          done
+          if git diff --cached --quiet; then
+            echo "Diagrams are up to date."
+            exit 0
+          fi
+          if [ "$FROM_FORK" = "true" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "pngs=${SOURCES%.excalidraw}.png" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "$MESSAGE"
+          git push
+
+      - name: Attach the rendered diagrams
+        if: steps.commit.outputs.stale == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-diagrams
+          path: ${{ steps.commit.outputs.pngs }}
+
+      - name: Fail on a fork with stale diagrams
+        if: steps.commit.outputs.stale == 'true'
+        run: |
+          echo "::error::Rendered PNGs are out of date and this branch cannot be pushed to from here. Download the rendered-diagrams artifact and commit it."
+          exit 1
