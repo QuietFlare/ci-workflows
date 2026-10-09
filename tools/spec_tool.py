@@ -33,6 +33,7 @@ import math
 import os
 import random
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -667,9 +668,12 @@ def relabel(doc, needle, text):
 
 
 def note(doc, near, text):
+    """A red note under an element. It carries no frameId on purpose: a
+    frame clips its children, and a note must stay readable at the edge."""
     e = find(doc, near)
+    text = "\n".join(textwrap.wrap(text, 44)) or text
     x, y = e["x"], e["y"] + e["height"] + 12
-    t = make_text(doc, text, x, y, font_size=14, color=RED, frame_id=e.get("frameId"), align="left")
+    t = make_text(doc, text, x, y, font_size=14, color=RED, align="left")
     doc["elements"].append(t)
     return t
 
