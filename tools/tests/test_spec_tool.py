@@ -45,6 +45,14 @@ class LintTests(FixtureCopy):
         self.assertEqual(code, 0, out)
         self.assertIn("1 arrow(s) without a label", out)
         self.assertIn("Timer engine -> Timer view", out)
+        self.assertNotIn("no rendered PNG", out)
+        self.assertNotIn("holds code", out)
+        self.assertIn("0 error(s), 1 warning(s)", out)
+
+    def test_missing_png_is_a_warning(self):
+        (self.root / "spec" / "timer.png").unlink()
+        code, out = run_lint(self.root)
+        self.assertEqual(code, 0)
         self.assertIn("no rendered PNG", out)
 
     def test_missing_spec_dir_is_an_error(self):

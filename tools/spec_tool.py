@@ -468,12 +468,12 @@ def lint(root, spec_dir):
         for child in sorted(root.iterdir()):
             if not child.is_dir() or child.name.startswith(".") or child.name in SKIP_DIRS or child == spec:
                 continue
-            if not any(p.suffix in CODE_SUFFIXES for p in child.rglob("*") if p.is_file()):
+            code = [str(p.relative_to(root)) for p in child.rglob("*") if p.is_file() and p.suffix in CODE_SUFFIXES]
+            if not code:
                 continue
-            rel = child.name + "/"
-            if not any(path_matches(rel + "x", p) or path_matches(child.name, p)
-                       for paths in mapping.values() for p in paths):
-                rep.warn(f"{rel} holds code but belongs to no module in map.yml", str(map_file))
+            patterns = [p for paths in mapping.values() for p in paths]
+            if not any(path_matches(f, p) for f in code for p in patterns):
+                rep.warn(f"{child.name}/ holds code but belongs to no module in map.yml", str(map_file))
 
     return rep.emit()
 
