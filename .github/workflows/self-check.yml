@@ -8,6 +8,8 @@ name: Self-check
 # - zizmor: security audit of workflow patterns (template injection,
 #   permissions, unpinned actions). Advisory for now; tighten once the
 #   baseline findings are triaged.
+# - spec-tool: the unit tests of tools/spec_tool.py, and the lint run
+#   against test-fixtures/spec-project, which must pass with warnings only.
 
 on:
   push:
@@ -37,3 +39,14 @@ jobs:
       - name: zizmor security audit (advisory)
         continue-on-error: true
         run: pipx run zizmor --no-online-audits .
+
+  spec-tool:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tools/tests -v
+
+      - name: Lint the fixture project
+        run: python3 tools/spec_tool.py lint --root test-fixtures/spec-project
