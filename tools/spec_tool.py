@@ -151,8 +151,8 @@ def arrow_labels(doc, claimed):
             labels[a["id"]] = bound
             continue
         for t in free_texts(doc):
-            if t["id"] in claimed or t.get("fontSize", 16) > 20:
-                continue
+            if t["id"] in claimed or t.get("fontSize", 16) > 20 or t.get("strokeColor") == RED:
+                continue  # titles and review notes are never arrow labels
             d = text_distance(a, t)
             if d < LABEL_REACH:
                 pairs.append((d, a["id"], t))
