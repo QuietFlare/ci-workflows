@@ -177,6 +177,17 @@ class EditTests(FixtureCopy):
         engine = st.find(st.load(self.diagram), "Timer engine", ("rectangle",))
         self.assertFalse(st.overlaps(new_box["x"], new_box["y"], new_box["width"], new_box["height"], engine, pad=0))
 
+    def test_wide_label_on_a_short_arrow_becomes_free_text_above_the_boxes(self):
+        doc = st.load(self.diagram)
+        st.add_box(doc, "Haptics", "Timer engine", "right")
+        a = st.add_arrow(doc, "Timer engine", "Haptics", "a label far wider than the gap between these boxes")
+        self.assertEqual(a.get("boundElements"), [])
+        text = st.describe(doc, "t")
+        self.assertIn("Timer engine -> Haptics : a label far wider than the gap between these boxes", text)
+        label = st.find(doc, "far wider", ("text",))
+        engine = st.find(doc, "Timer engine", ("rectangle",))
+        self.assertLess(label["y"] + label["height"], engine["y"])
+
     def test_add_box_avoids_existing_boxes(self):
         doc = st.load(self.diagram)
         st.add_box(doc, "Haptics", "Timer engine", "right")
