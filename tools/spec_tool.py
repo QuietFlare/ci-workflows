@@ -48,7 +48,7 @@ SKIP_DIRS = {
 }
 RED = "#e03131"
 BLACK = "#1e1e1e"
-LABEL_REACH = 90  # px: a free text this close to an arrow's midpoint labels it
+LABEL_REACH = 60  # px: a free text this close to an arrow's path labels it
 
 
 # --------------------------------------------------------------------------
@@ -112,13 +112,28 @@ def arrow_midpoint(a):
     return a["x"], a["y"]
 
 
+def path_distance(a, point):
+    """Distance from a point to the nearest segment of an arrow's path."""
+    px, py = point
+    pts = [(a["x"] + x, a["y"] + y) for x, y in (a.get("points") or [[0, 0]])]
+    if len(pts) == 1:
+        return math.hypot(px - pts[0][0], py - pts[0][1])
+    best = math.inf
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        dx, dy = x1 - x0, y1 - y0
+        L = dx * dx + dy * dy
+        t = 0 if L == 0 else max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / L))
+        best = min(best, math.hypot(px - (x0 + dx * t), py - (y0 + dy * t)))
+    return best
+
+
 def free_texts(doc):
     return [e for e in live(doc) if e["type"] == "text" and not e.get("containerId")]
 
 
 def arrow_labels(doc, claimed):
-    """arrow id -> label. A bound text wins; otherwise the nearest free text
-    to the arrow's midpoint, each text given to one arrow only, closest pairs
+    """arrow id -> label. A bound text wins; otherwise the free text nearest
+    to the arrow's path, each text given to one arrow only, closest pairs
     first. Texts used as labels are added to `claimed`."""
     labels = {}
     pairs = []
@@ -127,12 +142,10 @@ def arrow_labels(doc, claimed):
         if bound:
             labels[a["id"]] = bound
             continue
-        mx, my = arrow_midpoint(a)
         for t in free_texts(doc):
             if t["id"] in claimed or t.get("fontSize", 16) > 20:
                 continue
-            cx, cy = center(t)
-            d = math.hypot(cx - mx, cy - my)
+            d = path_distance(a, center(t))
             if d < LABEL_REACH:
                 pairs.append((d, a["id"], t))
     pairs.sort(key=lambda p: p[0])
