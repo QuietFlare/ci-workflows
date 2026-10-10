@@ -628,13 +628,13 @@ def add_arrow(doc, src_needle, dst_needle, label):
     if label:
         tw, th = text_size(label, 14)
         mx, my = (sx + ex) / 2, (sy + ey) / 2
-        if tw > d * 0.8:
+        if abs(ux) > abs(uy) and tw > d * 0.8:
             # Excalidraw draws a bound label at the arrow's midpoint, so a label
             # wider than a short arrow would cover the boxes it joins. Place it
             # as free text just above them instead; describe() still reads a
             # free text near the midpoint as the arrow's label.
             lift = max(src["height"], dst["height"]) / 2 + th / 2 + 4
-            t = make_text(doc, label, mx - tw / 2, my - lift - th / 2, font_size=14, frame_id=src.get("frameId"))
+            t = make_text(doc, label, mx - tw / 2, my - lift - th / 2, font_size=14)
         else:
             t = make_text(doc, label, mx - tw / 2, my - th / 2, font_size=14, container=a["id"], frame_id=src.get("frameId"))
             a["boundElements"] = [{"type": "text", "id": t["id"]}]
