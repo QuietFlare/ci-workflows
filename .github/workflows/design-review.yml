@@ -1,0 +1,246 @@
+name: Design Review (reusable)
+
+# Review a pull request against the agreed design (SPEC.md), and carry the
+# design change in the same pull request when the code departs from it.
+#
+# 1. Lint the spec. No spec, no review: the job fails and says so.
+# 2. Map the changed files to modules through map.yml. Nothing mapped
+#    changed: the job ends quietly. Code changed that no module covers:
+#    one comment says so.
+# 3. Claude Code reads rules.md, the touched diagrams as text, and the
+#    diff. No design impact: one line. Drift: it edits the diagram with
+#    spec_tool.py (relabel, add a box or arrow, leave a red note), commits
+#    to the branch, and posts one comment. A person approves the pull
+#    request to accept code and design together.
+# 4. If the diagram changed, excalidraw-render re-renders the PNG.
+#
+# Needs, in the calling repo: the Claude GitHub App installed, and an
+# ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN) secret. Without a key,
+# steps 1 and 2 still run and step 3 is skipped with a notice. A pull
+# request from a fork gets steps 1 and 2 only: it cannot be pushed to and
+# has no secrets.
+#
+# Minimal caller:
+#   on:
+#     pull_request:
+#       types: [opened, reopened, ready_for_review]
+#   permissions:
+#     contents: write
+#     pull-requests: write
+#     id-token: write
+#   jobs:
+#     design:
+#       uses: QuietFlare/ci-workflows/.github/workflows/design-review.yml@v1
+#       secrets:
+#         anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+#
+# No `permissions:` block here on purpose: the caller's grant is inherited,
+# and declaring writes here would force every caller in the graph to grant
+# them, as ai-review.yml explains.
+
+on:
+  workflow_call:
+    inputs:
+      spec-dir:
+        description: Folder holding the diagrams, rules.md and map.yml
+        required: false
+        type: string
+        default: 'spec'
+      model:
+        description: Model for the review; empty takes Claude Code's default
+        required: false
+        type: string
+        default: ''
+      render:
+        description: Re-render PNGs through excalidraw-render.yml when the reviewer changed a diagram
+        required: false
+        type: boolean
+        default: true
+      tools-ref:
+        description: Ref of QuietFlare/ci-workflows to take tools/spec_tool.py from
+        required: false
+        type: string
+        default: 'v1'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      anthropic-api-key:
+        description: Anthropic API key; the review step is skipped without one of the two credentials
+        required: false
+      claude-code-oauth-token:
+        description: Claude Code OAuth token, an alternative to the API key
+        required: false
+      push-token:
+        description: Token to push with instead of the workflow's own, when the pushed commit must start other workflows
+        required: false
+
+jobs:
+  review:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      changed: ${{ steps.after.outputs.changed }}
+    env:
+      SPEC_DIR: ${{ inputs.spec-dir }}
+      TOOL: python3 .spec-tools/tools/spec_tool.py
+      FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.push-token || github.token }}
+          fetch-depth: 0
+
+      - name: Fetch the spec tool
+        uses: actions/checkout@v4
+        with:
+          repository: QuietFlare/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .spec-tools
+          sparse-checkout: tools
+
+      - name: Lint the spec
+        # shellcheck disable=SC2086
+        run: |
+          printf '.spec-tools/\n.spec-review/\n' >> .git/info/exclude
+          $TOOL lint --spec-dir "$SPEC_DIR"
+
+      - name: Map the change to modules
+        id: touched
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          UPSTREAM: ${{ github.server_url }}/${{ github.repository }}.git
+        # shellcheck disable=SC2086
+        run: |
+          mkdir -p .spec-review
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch -q "$UPSTREAM" "$BASE"
+          git diff --name-only "$BASE" "$HEAD" > .spec-review/files.txt
+          $TOOL touched --spec-dir "$SPEC_DIR" --json < .spec-review/files.txt > .spec-review/touched.json
+          $TOOL touched --spec-dir "$SPEC_DIR" < .spec-review/files.txt
+          modules=$(python3 -c 'import json;print(" ".join(json.load(open(".spec-review/touched.json"))["modules"]))')
+          unmapped=$(python3 -c 'import json;print(" ".join(json.load(open(".spec-review/touched.json"))["unmapped"]))')
+          spec_changed=$(python3 -c 'import json;print(" ".join(json.load(open(".spec-review/touched.json"))["spec_changed"]))')
+          {
+            echo "modules=$modules"
+            echo "unmapped=$unmapped"
+            echo "spec_changed=$spec_changed"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$modules" ]; then
+            diagrams=""
+            for m in $modules; do diagrams="$diagrams $SPEC_DIR/$m.excalidraw"; done
+            # shellcheck disable=SC2086 # one path per module, by design
+            $TOOL describe $diagrams > .spec-review/design.txt
+            paths=""
+            for m in $modules; do
+              paths="$paths $(python3 -c 'import sys,json;sys.path.insert(0,".spec-tools/tools");import spec_tool as s;print(" ".join(s.parse_map(open(sys.argv[1]).read())[sys.argv[2]]))' "$SPEC_DIR/map.yml" "$m")"
+            done
+            # shellcheck disable=SC2086 # the mapped paths, by design
+            git diff "$BASE" "$HEAD" -- $paths > .spec-review/diff.patch
+            echo "Design and diff prepared for: $modules ($(wc -l < .spec-review/diff.patch) diff lines)"
+          fi
+
+      - name: Say when changed code has no design
+        if: steps.touched.outputs.modules == '' && steps.touched.outputs.unmapped != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNMAPPED: ${{ steps.touched.outputs.unmapped }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # shellcheck disable=SC2016
+          body="**Design review:** no design covers the code this pull request changes, so there is nothing to review it against. Add the paths to \`$SPEC_DIR/map.yml\` under a module with a diagram, or draw one.
+
+          Unmapped: $(for f in $UNMAPPED; do printf '`%s` ' "$f"; done)"
+          gh pr comment "$PR" --body "$body"
+
+      - name: Check for a credential
+        id: key
+        env:
+          API_KEY: ${{ secrets.anthropic-api-key }}
+          OAUTH: ${{ secrets.claude-code-oauth-token }}
+        run: |
+          if [ "$FROM_FORK" = "true" ]; then
+            echo "::notice::Pull request from a fork: lint and mapping ran, the review is skipped (no secrets, no push)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$API_KEY" ] && [ -z "$OAUTH" ]; then
+            echo "::warning::No anthropic-api-key or claude-code-oauth-token secret: lint and mapping ran, the review is skipped."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Give the reviewer a git identity
+        if: steps.key.outputs.ok == 'true' && steps.touched.outputs.modules != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Review the change against the design
+        if: steps.key.outputs.ok == 'true' && steps.touched.outputs.modules != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          github_token: ${{ secrets.push-token || github.token }}
+          claude_args: |
+            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
+            --allowedTools "Read,Glob,Grep,Bash(python3 .spec-tools/tools/spec_tool.py:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
+          prompt: |
+            You are the design reviewer for pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Design and requirements exist before code. Your job is to say whether this change still matches them, and to carry the design change in the same pull request when it does not. You do not review code quality, style, naming or tests, and you do not comment on anything the design does not cover.
+
+            Read, in this order:
+            1. ${{ inputs.spec-dir }}/rules.md: the non-negotiables.
+            2. .spec-review/design.txt: the agreed design of the touched modules, rendered as text from ${{ inputs.spec-dir }}/<module>.excalidraw. Headings are frames or sections, then boxes (components), arrows (from -> to : label), and loose text.
+            3. .spec-review/diff.patch: the change, limited to the mapped paths.
+            Touched modules: ${{ steps.touched.outputs.modules }}
+            ${{ steps.touched.outputs.spec_changed != '' && format('The author also changed these spec files in this pull request, so the design you read is already theirs: {0}', steps.touched.outputs.spec_changed) || '' }}
+            ${{ steps.touched.outputs.unmapped != '' && format('Changed code no module covers (mention it in one line, do not review it): {0}', steps.touched.outputs.unmapped) || '' }}
+
+            Decide one of two outcomes.
+
+            A. No design impact. The change stays inside the boxes and arrows as drawn and breaks no rule. Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`: the line "**Design review:** no design impact." followed by one sentence saying what the change does in design terms. Then stop. Most pull requests end here. Do not invent concerns to justify the run.
+
+            B. Drift. A responsibility moved between components, a dependency crossed a boundary, a component or flow appeared or disappeared, an arrow's label is no longer true, or a rule in rules.md is broken.
+
+            For B:
+            - Edit the diagram so it describes what the code now does, using only these commands on ${{ inputs.spec-dir }}/<module>.excalidraw:
+                python3 .spec-tools/tools/spec_tool.py relabel <file> --element "<label substring>" --text "<new label>"
+                python3 .spec-tools/tools/spec_tool.py add-box <file> --label "<label>" --near "<existing box>" --side right|below
+                python3 .spec-tools/tools/spec_tool.py add-arrow <file> --from "<box>" --to "<box>" --label "<what flows>"
+                python3 .spec-tools/tools/spec_tool.py note <file> --near "<element>" --text "Redraw: <what a person must redraw and why>"
+                python3 .spec-tools/tools/spec_tool.py mark <file> --element "<element>" --note "<why it is no longer true>"
+              Run `python3 .spec-tools/tools/spec_tool.py describe <file>` afterwards to check the result reads correctly. Never edit the JSON by hand, never move or delete what a person drew, never touch rules.md, map.yml or any PNG.
+            - A broken rule is reported in the comment, never fixed by editing the rule or the diagram to match.
+            - If the change needs more than a relabel or an added box or arrow, leave a red note instead and say so.
+            - Commit the diagram with `git add ${{ inputs.spec-dir }}` and `git commit -m "spec: <what changed, under 60 characters>"`, then `git push`. Git identity is already configured.
+            - Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`, under 150 words, starting with "**Design review:** drift." Say what the code changed in design terms, what you changed in the diagram, and any rule it breaks. End with: "Approving this pull request accepts the code and the design change together."
+
+            Post only through `gh pr comment`. Do not write the review as a message.
+
+      - name: Did the reviewer change a diagram?
+        id: after
+        if: always()
+        env:
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$HEAD" ] && ! git diff --quiet "$HEAD" HEAD -- "$SPEC_DIR"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "The reviewer committed a design change."
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  render:
+    needs: review
+    if: needs.review.outputs.changed == 'true' && inputs.render
+    uses: QuietFlare/ci-workflows/.github/workflows/excalidraw-render.yml@v1
+    with:
+      sources: ${{ inputs.spec-dir }}/*.excalidraw
+      commit-message: 'spec: render diagrams'
+    secrets:
+      push-token: ${{ secrets.push-token }}

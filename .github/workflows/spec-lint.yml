@@ -1,0 +1,66 @@
+name: Spec Lint (reusable)
+
+# Check a project against the spec contract (SPEC.md): a spec folder with
+# one Excalidraw diagram per module, rules.md, and map.yml. No model, no
+# secrets, seconds on Ubuntu.
+#
+# Errors fail the job: no spec folder, empty rules, a module without a
+# diagram, a mapped path that does not exist, a frame without a name.
+# Warnings annotate but pass: unlabelled arrows, unmapped code folders, a
+# missing PNG, elements left red by a review.
+#
+# Minimal caller:
+#   on:
+#     pull_request:
+#   permissions:
+#     contents: read
+#   jobs:
+#     spec:
+#       uses: QuietFlare/ci-workflows/.github/workflows/spec-lint.yml@v1
+
+on:
+  workflow_call:
+    inputs:
+      spec-dir:
+        description: Folder holding the diagrams, rules.md and map.yml, relative to root
+        required: false
+        type: string
+        default: 'spec'
+      root:
+        description: Directory the spec folder and the paths in map.yml are relative to, for repos where the project is not at the top
+        required: false
+        type: string
+        default: '.'
+      tools-ref:
+        description: Ref of QuietFlare/ci-workflows to take tools/spec_tool.py from; pin it to the same tag as this workflow when exactness matters
+        required: false
+        type: string
+        default: 'v1'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the spec tool
+        uses: actions/checkout@v4
+        with:
+          repository: QuietFlare/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .spec-tools
+          sparse-checkout: tools
+
+      - name: Lint the spec
+        env:
+          SPEC_DIR: ${{ inputs.spec-dir }}
+          ROOT: ${{ inputs.root }}
+        run: python3 .spec-tools/tools/spec_tool.py lint --root "$ROOT" --spec-dir "$SPEC_DIR"
