@@ -150,12 +150,16 @@ def arrow_labels(doc, claimed):
         if bound:
             labels[a["id"]] = bound
             continue
+        mx, my = arrow_midpoint(a)
         for t in free_texts(doc):
             if t["id"] in claimed or t.get("fontSize", 16) > 20 or t.get("strokeColor") == RED:
                 continue  # titles and review notes are never arrow labels
             d = text_distance(a, t)
             if d < LABEL_REACH:
-                pairs.append((d, a["id"], t))
+                # A line that merely crosses a label scores 0 on distance, so
+                # the arrow whose midpoint the label sits beside wins the tie.
+                cx, cy = center(t)
+                pairs.append((d + 0.25 * math.hypot(cx - mx, cy - my), a["id"], t))
     pairs.sort(key=lambda p: p[0])
     for _, aid, t in pairs:
         if aid in labels or t["id"] in claimed:
