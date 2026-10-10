@@ -628,6 +628,16 @@ def add_arrow(doc, src_needle, dst_needle, label):
     if label:
         tw, th = text_size(label, 14)
         mx, my = (sx + ex) / 2, (sy + ey) / 2
+        # Sit the label beside the line, not on it: shift along the normal,
+        # upwards for a horizontal arrow and to the right for a vertical one.
+        nx, ny = -uy / d, ux / d
+        if ny > 0 or (ny == 0 and nx < 0):
+            nx, ny = -nx, -ny
+        off = th / 2 + 6 if abs(ny) >= abs(nx) else tw / 2 + 6
+        if abs(ny) >= abs(nx) and tw > d:
+            # Wider than the arrow is long: lift it clear of the boxes it joins.
+            off = min(src["height"], dst["height"]) / 2 + th / 2 + 4
+        mx, my = mx + nx * off, my + ny * off
         t = make_text(doc, label, mx - tw / 2, my - th / 2, font_size=14, container=a["id"], frame_id=src.get("frameId"))
         a["boundElements"] = [{"type": "text", "id": t["id"]}]
         doc["elements"].append(t)
