@@ -47,5 +47,5 @@ jobs:
   spec-lint:
     uses: ./.github/workflows/spec-lint.yml
     with:
-      spec-dir: test-fixtures/spec-project/spec
+      root: test-fixtures/spec-project
       tools-ref: ${{ github.head_ref || github.ref_name }}
