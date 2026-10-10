@@ -127,6 +127,14 @@ def path_distance(a, point):
     return best
 
 
+def text_distance(a, t):
+    """Distance from an arrow's path to the nearest of a text's centre and
+    corners, so a wide label set beside a line still counts as close."""
+    x, y, w, h = t["x"], t["y"], t["width"], t["height"]
+    probes = [center(t), (x, y), (x + w, y), (x, y + h), (x + w, y + h), (x, y + h / 2), (x + w, y + h / 2)]
+    return min(path_distance(a, p) for p in probes)
+
+
 def free_texts(doc):
     return [e for e in live(doc) if e["type"] == "text" and not e.get("containerId")]
 
@@ -145,7 +153,7 @@ def arrow_labels(doc, claimed):
         for t in free_texts(doc):
             if t["id"] in claimed or t.get("fontSize", 16) > 20:
                 continue
-            d = path_distance(a, center(t))
+            d = text_distance(a, t)
             if d < LABEL_REACH:
                 pairs.append((d, a["id"], t))
     pairs.sort(key=lambda p: p[0])
