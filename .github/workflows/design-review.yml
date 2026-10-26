@@ -7,8 +7,9 @@ name: Design Review (reusable)
 # 2. Map the changed files to modules through map.yml. Nothing mapped
 #    changed: the job ends quietly. Code changed that no module covers:
 #    one comment says so.
-# 3. Claude Code reads rules.md, the touched diagrams as text, and the
-#    diff. No design impact: one line. Drift: it edits the diagram with
+# 3. Claude Code reads rules.md, the accepted ADRs in adr/ if there are
+#    any, the touched diagrams as text, and the diff. No design impact:
+#    one line. Drift: it edits the diagram with
 #    spec_tool.py (relabel, add a box or arrow, leave a red note), commits
 #    to the branch, and posts one comment. A person approves the pull
 #    request to accept code and design together.
@@ -42,7 +43,7 @@ on:
   workflow_call:
     inputs:
       spec-dir:
-        description: Folder holding the diagrams, rules.md and map.yml
+        description: Folder holding the diagrams, rules.md, map.yml and an optional adr/ folder
         required: false
         type: string
         default: 'spec'
@@ -195,17 +196,18 @@ jobs:
 
             Read, in this order:
             1. ${{ inputs.spec-dir }}/rules.md: the non-negotiables.
-            2. .spec-review/design.txt: the agreed design of the touched modules, rendered as text from ${{ inputs.spec-dir }}/<module>.excalidraw. Headings are frames or sections, then boxes (components), arrows (from -> to : label), and loose text.
-            3. .spec-review/diff.patch: the change, limited to the mapped paths.
+            2. ${{ inputs.spec-dir }}/adr/*.md, if the folder exists: decisions already taken, one per file. Only those whose Status line says accepted count; skip proposed, rejected and superseded ones. Read the Decision section of each; the rest is background.
+            3. .spec-review/design.txt: the agreed design of the touched modules, rendered as text from ${{ inputs.spec-dir }}/<module>.excalidraw. Headings are frames or sections, then boxes (components), arrows (from -> to : label), and loose text.
+            4. .spec-review/diff.patch: the change, limited to the mapped paths.
             Touched modules: ${{ steps.touched.outputs.modules }}
             ${{ steps.touched.outputs.spec_changed != '' && format('The author also changed these spec files in this pull request, so the design you read is already theirs: {0}', steps.touched.outputs.spec_changed) || '' }}
             ${{ steps.touched.outputs.unmapped != '' && format('Changed code no module covers (mention it in one line, do not review it): {0}', steps.touched.outputs.unmapped) || '' }}
 
             Decide one of two outcomes.
 
-            A. No design impact. The change stays inside the boxes and arrows as drawn and breaks no rule. Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`: the line "**Design review:** no design impact." followed by one sentence saying what the change does in design terms. Then stop. Most pull requests end here. Do not invent concerns to justify the run.
+            A. No design impact. The change stays inside the boxes and arrows as drawn, breaks no rule and goes against no accepted ADR. Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`: the line "**Design review:** no design impact." followed by one sentence saying what the change does in design terms. Then stop. Most pull requests end here. Do not invent concerns to justify the run.
 
-            B. Drift. A responsibility moved between components, a dependency crossed a boundary, a component or flow appeared or disappeared, an arrow's label is no longer true, or a rule in rules.md is broken.
+            B. Drift. A responsibility moved between components, a dependency crossed a boundary, a component or flow appeared or disappeared, an arrow's label is no longer true, a rule in rules.md is broken, or the code does what an accepted ADR decided against.
 
             For B:
             - Edit the diagram so it describes what the code now does, using only these commands on ${{ inputs.spec-dir }}/<module>.excalidraw:
@@ -214,11 +216,11 @@ jobs:
                 python3 .spec-tools/tools/spec_tool.py add-arrow <file> --from "<box>" --to "<box>" --label "<what flows>"
                 python3 .spec-tools/tools/spec_tool.py note <file> --near "<element>" --text "Redraw: <what a person must redraw and why>"
                 python3 .spec-tools/tools/spec_tool.py mark <file> --element "<element>" --note "<why it is no longer true>"
-              Run `python3 .spec-tools/tools/spec_tool.py describe <file>` afterwards to check the result reads correctly. Never edit the JSON by hand, never move or delete what a person drew, never touch rules.md, map.yml or any PNG.
-            - A broken rule is reported in the comment, never fixed by editing the rule or the diagram to match.
+              Run `python3 .spec-tools/tools/spec_tool.py describe <file>` afterwards to check the result reads correctly. Never edit the JSON by hand, never move or delete what a person drew, never touch rules.md, map.yml, an ADR or any PNG.
+            - A broken rule or a contradicted ADR is reported in the comment, never fixed by editing the rule, the ADR or the diagram to match. Name the ADR by its file name and quote the sentence of its decision the change goes against. Only a person decides whether the code or the ADR is wrong; a new ADR that supersedes the old one is their call.
             - If the change needs more than a relabel or an added box or arrow, leave a red note instead and say so.
             - Commit the diagram with `git add ${{ inputs.spec-dir }}` and `git commit -m "spec: <what changed, under 60 characters>"`, then `git push`. Git identity is already configured.
-            - Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`, under 150 words, starting with "**Design review:** drift." Say what the code changed in design terms, what you changed in the diagram, and any rule it breaks. End with: "Approving this pull request accepts the code and the design change together."
+            - Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`, under 150 words, starting with "**Design review:** drift." Say what the code changed in design terms, what you changed in the diagram, and any rule it breaks or ADR it contradicts. End with: "Approving this pull request accepts the code and the design change together."
 
             Post only through `gh pr comment`. Do not write the review as a message.
 
