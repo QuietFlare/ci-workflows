@@ -1,0 +1,30 @@
+# Review every pull request against the agreed design. Copy to
+# .github/workflows/design.yml.
+#
+# The design lives in spec/ (see SPEC.md in ci-workflows). The lint and the
+# module mapping run with no secret. The review itself needs the Claude
+# GitHub App installed on this repo and an ANTHROPIC_API_KEY secret; until
+# then it is skipped with a warning.
+#
+# `opened` and `ready_for_review` give one review per pull request. Add
+# `synchronize` for a review after every push; the reviewer's own pushes
+# never trigger it.
+name: design
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  design:
+    uses: QuietFlare/ci-workflows/.github/workflows/design-review.yml@v1
+    # Defaults read spec/. A repo that keeps its diagrams elsewhere:
+    # with:
+    #   spec-dir: docs
+    secrets:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

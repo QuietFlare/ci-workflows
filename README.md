@@ -29,7 +29,7 @@ Three **pipelines** — the batteries-included entry points:
 | [`release-pipeline.yml`](.github/workflows/release-pipeline.yml) | the same tests, then archive + upload to **TestFlight** via App Store Connect cloud signing | version tags (`v*`) |
 | [`security-pipeline.yml`](.github/workflows/security-pipeline.yml) | secret scan + dependency review + App Store compliance preflight (all Ubuntu, seconds-cheap) → opt-in CodeQL | `pull_request` + weekly schedule |
 
-Nine **building blocks** — call them directly when you want a different composition:
+Eleven **building blocks** — call them directly when you want a different composition:
 
 | Workflow | Runner | What it does |
 |---|---|---|
@@ -42,8 +42,10 @@ Nine **building blocks** — call them directly when you want a different compos
 | [`ios-compliance.yml`](.github/workflows/ios-compliance.yml) | Ubuntu | App Store preflight: privacy manifest present, `ITSAppUsesNonExemptEncryption` declared, no signing material (.p8/.p12/.mobileprovision) committed |
 | [`python-test.yml`](.github/workflows/python-test.yml) | Ubuntu | Python test suite across a version matrix, stdlib-first: installs nothing unless a requirements file is named |
 | [`excalidraw-render.yml`](.github/workflows/excalidraw-render.yml) | Ubuntu | Renders `.excalidraw` sources to PNG without a browser and commits them to the PR branch, so a diagram in the README never lags its source |
+| [`spec-lint.yml`](.github/workflows/spec-lint.yml) | Ubuntu | Checks a repo against the [spec contract](SPEC.md): one Excalidraw diagram per module, `rules.md`, `map.yml`. No model, no secrets |
+| [`design-review.yml`](.github/workflows/design-review.yml) | Ubuntu | Reads a PR against the agreed design, edits the diagram when the code departs from it, commits to the branch and posts one comment. A person approves code and design together |
 
-Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), a [Python test matrix](examples/python-ci.yml), and [diagrams that re-render on change](examples/diagrams.yml).
+Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), a [Python test matrix](examples/python-ci.yml), [diagrams that re-render on change](examples/diagrams.yml), and a [design review on every PR](examples/spec-review.yml).
 
 Every input is documented inline in each workflow's `workflow_call` block, with a minimal caller in its header comment.
 
@@ -65,6 +67,8 @@ Every input is documented inline in each workflow's `workflow_call` block, with 
 | AI review | one repo secret: `GEMINI_API_KEY` ([free from Google AI Studio](https://aistudio.google.com/apikey)) — or an OpenAI key and a `review-model` change |
 | TestFlight | `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` from an [App Store Connect API key](https://appstoreconnect.apple.com/access/integrations/api), plus an `ExportOptions.plist` in your repo |
 | CodeQL → Security tab | public repo (free) or GitHub Advanced Security; otherwise use `upload: false` for artifact mode |
+| Spec lint | nothing — a `spec/` folder shaped as [SPEC.md](SPEC.md) says |
+| Design review | the [Claude GitHub App](https://github.com/apps/claude) installed on the repo, plus `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`); the lint and module mapping run without them |
 
 ## Picking Xcode and simulator versions
 

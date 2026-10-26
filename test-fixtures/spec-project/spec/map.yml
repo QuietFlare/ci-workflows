@@ -1,0 +1,4 @@
+# module -> the source paths whose design lives in spec/<module>.excalidraw
+timer:
+  - src/timer/
+  - app/
