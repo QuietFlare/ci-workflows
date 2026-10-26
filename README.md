@@ -29,7 +29,7 @@ Three **pipelines** — the batteries-included entry points:
 | [`release-pipeline.yml`](.github/workflows/release-pipeline.yml) | the same tests, then archive + upload to **TestFlight** via App Store Connect cloud signing | version tags (`v*`) |
 | [`security-pipeline.yml`](.github/workflows/security-pipeline.yml) | secret scan + dependency review + App Store compliance preflight (all Ubuntu, seconds-cheap) → opt-in CodeQL | `pull_request` + weekly schedule |
 
-Eleven **building blocks** — call them directly when you want a different composition:
+Twelve **building blocks** — call them directly when you want a different composition:
 
 | Workflow | Runner | What it does |
 |---|---|---|
@@ -44,8 +44,9 @@ Eleven **building blocks** — call them directly when you want a different comp
 | [`excalidraw-render.yml`](.github/workflows/excalidraw-render.yml) | Ubuntu | Renders `.excalidraw` sources to PNG without a browser and commits them to the PR branch, so a diagram in the README never lags its source |
 | [`spec-lint.yml`](.github/workflows/spec-lint.yml) | Ubuntu | Checks a repo against the [spec contract](SPEC.md): one Excalidraw diagram per module, `rules.md`, `map.yml`. No model, no secrets |
 | [`design-review.yml`](.github/workflows/design-review.yml) | Ubuntu | Reads a PR against the agreed design, edits the diagram when the code departs from it, commits to the branch and posts one comment. A person approves code and design together |
+| [`compliance-review.yml`](.github/workflows/compliance-review.yml) | Ubuntu | Checks a PR against the project's own `compliance/rules.md` (GDPR, EU AI Act, licences, store rules). Hard file checks block: forbidden Android permissions, required files, every data file in the data register. Claude reads the rules and the diff and posts one advisory comment |
 
-Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), a [Python test matrix](examples/python-ci.yml), [diagrams that re-render on change](examples/diagrams.yml), and a [design review on every PR](examples/spec-review.yml).
+Complete caller workflows to copy live in [`examples/`](examples/): a [plain SwiftUI app](examples/pr-ci.yml), a [KMP + iOS app](examples/kmp-pr-ci.yml), a [tag-triggered release](examples/release.yml), a [security pipeline](examples/security.yml), a [scheduled CodeQL scan](examples/codeql.yml), a [Python test matrix](examples/python-ci.yml), [diagrams that re-render on change](examples/diagrams.yml), a [design review on every PR](examples/spec-review.yml), and a [compliance review on every PR](examples/compliance-review.yml).
 
 Every input is documented inline in each workflow's `workflow_call` block, with a minimal caller in its header comment.
 
@@ -69,6 +70,7 @@ Every input is documented inline in each workflow's `workflow_call` block, with 
 | CodeQL → Security tab | public repo (free) or GitHub Advanced Security; otherwise use `upload: false` for artifact mode |
 | Spec lint | nothing — a `spec/` folder shaped as [SPEC.md](SPEC.md) says |
 | Design review | the [Claude GitHub App](https://github.com/apps/claude) installed on the repo, plus `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`); the lint and module mapping run without them |
+| Compliance review | a `compliance/rules.md` in the repo for the hard checks; the AI review also needs the [Claude GitHub App](https://github.com/apps/claude) and `ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) |
 
 ## Picking Xcode and simulator versions
 

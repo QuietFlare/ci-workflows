@@ -1,0 +1,32 @@
+# Check every pull request against the project's compliance rules. Copy to
+# .github/workflows/compliance.yml.
+#
+# The rules live in compliance/rules.md: numbered rules, one per point the
+# project promises (GDPR, EU AI Act, data licences, store policies). The
+# hard checks run with no secret and fail the build. The AI review needs the
+# Claude GitHub App installed on this repo and an ANTHROPIC_API_KEY secret;
+# until then it is skipped with a warning. It comments and never blocks.
+name: compliance
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  compliance:
+    uses: QuietFlare/ci-workflows/.github/workflows/compliance-review.yml@v1
+    with:
+      # A local-only app: no source manifest may ask for the network.
+      forbid-android-permissions: android.permission.INTERNET
+      # A model repo: the card ships with every release, and every data file
+      # is named in the register with its source and licence.
+      # require-files: MODEL_CARD.md
+      # data-paths: data
+      # data-register: docs/data-sources.md
+    secrets:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
