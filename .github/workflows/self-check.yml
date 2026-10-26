@@ -8,8 +8,9 @@ name: Self-check
 # - zizmor: security audit of workflow patterns (template injection,
 #   permissions, unpinned actions). Advisory for now; tighten once the
 #   baseline findings are triaged.
-# - spec-tool: the unit tests of tools/spec_tool.py, and the lint run
-#   against test-fixtures/spec-project, which must pass with warnings only.
+# - spec-tool: the unit tests of tools/spec_tool.py and tools/compliance_check.py,
+#   and the lint run against test-fixtures/spec-project, which must pass with
+#   warnings only.
 
 on:
   push:

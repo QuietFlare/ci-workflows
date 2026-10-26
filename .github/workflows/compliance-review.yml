@@ -1,0 +1,203 @@
+name: Compliance Review (reusable)
+
+# Review a pull request against the project's own compliance rules: GDPR,
+# the EU AI Act, data licences, store policies, whatever the project wrote
+# down in one rules file.
+#
+# Two jobs, with different weight:
+#
+# 1. checks: plain file checks through tools/compliance_check.py. They
+#    cannot be argued with, so a failure fails the build. The rules file
+#    must exist; optionally no AndroidManifest.xml may request a forbidden
+#    permission, required files (a model card, a privacy policy) must
+#    exist, and every file under a data path must be named in a data
+#    register.
+# 2. review: Claude reads the rules file and the diff and posts one comment.
+#    It advises and never fails the build, because a model can be wrong
+#    about a rule. A person decides.
+#
+# The permission check reads source manifests only. A permission a library
+# adds through manifest merging is invisible here; check the merged manifest
+# of a release build for that.
+#
+# Needs, in the calling repo: compliance/rules.md (or the path given in
+# rules-file). For the review, the Claude GitHub App installed and an
+# ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN) secret. Without a key the
+# checks still run and the review is skipped with a notice. A pull request
+# from a fork gets the checks only: it has no secrets.
+#
+# Minimal caller:
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened, ready_for_review]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#     id-token: write
+#   jobs:
+#     compliance:
+#       uses: QuietFlare/ci-workflows/.github/workflows/compliance-review.yml@v1
+#       with:
+#         forbid-android-permissions: android.permission.INTERNET
+#       secrets:
+#         anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+#
+# No `permissions:` block here on purpose: the caller's grant is inherited,
+# and declaring writes here would force every caller in the graph to grant
+# them, as ai-review.yml explains.
+
+on:
+  workflow_call:
+    inputs:
+      rules-file:
+        description: The project's compliance rules, read by the reviewer; the checks fail without it
+        required: false
+        type: string
+        default: 'compliance/rules.md'
+      forbid-android-permissions:
+        description: Space-separated Android permissions no source AndroidManifest.xml may request, e.g. android.permission.INTERNET
+        required: false
+        type: string
+        default: ''
+      require-files:
+        description: Space-separated repo-relative files or folders that must exist, e.g. MODEL_CARD.md docs/privacy.md
+        required: false
+        type: string
+        default: ''
+      data-paths:
+        description: Space-separated folders whose every tracked file must be named in data-register
+        required: false
+        type: string
+        default: ''
+      data-register:
+        description: The file that names every data file with its source and licence; required when data-paths is set
+        required: false
+        type: string
+        default: ''
+      model:
+        description: Model for the review; empty takes Claude Code's default
+        required: false
+        type: string
+        default: ''
+      tools-ref:
+        description: Ref of QuietFlare/ci-workflows to take tools/compliance_check.py from
+        required: false
+        type: string
+        default: 'v1'
+      runner:
+        description: Runner label
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      anthropic-api-key:
+        description: Anthropic API key; the review is skipped without one of the two credentials
+        required: false
+      claude-code-oauth-token:
+        description: Claude Code OAuth token, an alternative to the API key
+        required: false
+
+jobs:
+  checks:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Fetch the compliance tool
+        uses: actions/checkout@v4
+        with:
+          repository: QuietFlare/ci-workflows
+          ref: ${{ inputs.tools-ref }}
+          path: .compliance-tools
+          sparse-checkout: tools
+          persist-credentials: false
+
+      - name: Run the hard checks
+        env:
+          RULES: ${{ inputs.rules-file }}
+          FORBID: ${{ inputs.forbid-android-permissions }}
+          REQUIRE: ${{ inputs.require-files }}
+          DATA_PATHS: ${{ inputs.data-paths }}
+          REGISTER: ${{ inputs.data-register }}
+        run: |
+          printf '.compliance-tools/\n' >> .git/info/exclude
+          args=(--rules "$RULES" --data-register "$REGISTER")
+          for p in $FORBID; do args+=(--forbid-android-permission "$p"); done
+          for f in $REQUIRE; do args+=(--require-file "$f"); done
+          for d in $DATA_PATHS; do args+=(--data-path "$d"); done
+          python3 .compliance-tools/tools/compliance_check.py "${args[@]}"
+
+  review:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.type != 'Bot'
+    runs-on: ${{ inputs.runner }}
+    env:
+      FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare the diff
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          RULES: ${{ inputs.rules-file }}
+        run: |
+          mkdir -p .compliance-review
+          printf '.compliance-review/\n' >> .git/info/exclude
+          git diff "$BASE" HEAD > .compliance-review/diff.patch
+          echo "lines=$(wc -l < .compliance-review/diff.patch)" >> "$GITHUB_OUTPUT"
+          if [ -f "$RULES" ]; then
+            echo "rules=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No rules file at $RULES: nothing to review against, the review is skipped."
+            echo "rules=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check for a credential
+        id: key
+        env:
+          API_KEY: ${{ secrets.anthropic-api-key }}
+          OAUTH: ${{ secrets.claude-code-oauth-token }}
+        run: |
+          if [ "$FROM_FORK" = "true" ]; then
+            echo "::notice::Pull request from a fork: the checks ran, the review is skipped (no secrets)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$API_KEY" ] && [ -z "$OAUTH" ]; then
+            echo "::warning::No anthropic-api-key or claude-code-oauth-token secret: the checks ran, the review is skipped."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Review the change against the rules
+        if: steps.key.outputs.ok == 'true' && steps.diff.outputs.rules == 'true' && steps.diff.outputs.lines != '0'
+        # Advisory: an API outage or a confused model must never block a merge.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.anthropic-api-key }}
+          claude_code_oauth_token: ${{ secrets.claude-code-oauth-token }}
+          github_token: ${{ github.token }}
+          claude_args: |
+            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
+            --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
+          prompt: |
+            You are the compliance reviewer for pull request #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Your only job is to say whether this change breaks one of the project's own compliance rules. You do not review code quality, style, naming, tests or design, and you are not giving legal advice.
+
+            Read, in this order:
+            1. ${{ inputs.rules-file }}: the rules. Each rule is what you check against. Nothing else is a rule.
+            2. .compliance-review/diff.patch: the change.
+            You may open any file in the repository when the diff alone cannot tell you whether a rule is broken, for example to see what a new dependency is used for or where a new data file came from.
+
+            A finding needs all three: a numbered or named rule from the rules file, a place in the diff that breaks it, and a reason a person can check. If you are unsure, say "worth a look" instead of "breaks". Do not invent concerns to justify the run. Most pull requests break nothing.
+
+            Post exactly one comment with `gh pr comment ${{ github.event.pull_request.number }} --body "..."`:
+            - Nothing found: the line "**Compliance review:** no findings." followed by one sentence naming which rules the change touched, if any.
+            - Findings: start with "**Compliance review:** N finding(s)." Then one short paragraph per finding: the rule, the file and line, what breaks it, and the smallest change that would fix it. Under 200 words in total. End with: "Advisory only. A person decides."
+
+            Post only through `gh pr comment`. Do not write the review as a message.
