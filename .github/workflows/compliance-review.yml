@@ -14,7 +14,9 @@ name: Compliance Review (reusable)
 #    register.
 # 2. review: Claude reads the rules file and the diff and posts one comment.
 #    It advises and never fails the build, because a model can be wrong
-#    about a rule. A person decides.
+#    about a rule. A person decides. When the reviewer itself fails, it
+#    says so in a comment, so a green job never hides a review that did
+#    not happen.
 #
 # The permission check reads source manifests only. A permission a library
 # adds through manifest merging is invisible here; check the merged manifest
@@ -174,8 +176,10 @@ jobs:
           fi
 
       - name: Review the change against the rules
+        id: review
         if: steps.key.outputs.ok == 'true' && steps.diff.outputs.rules == 'true' && steps.diff.outputs.lines != '0'
         # Advisory: an API outage or a confused model must never block a merge.
+        # The next step makes sure it never passes in silence either.
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
@@ -201,3 +205,15 @@ jobs:
             - Findings: start with "**Compliance review:** N finding(s)." Then one short paragraph per finding: the rule, the file and line, what breaks it, and the smallest change that would fix it. Under 200 words in total. End with: "Advisory only. A person decides."
 
             Post only through `gh pr comment`. Do not write the review as a message.
+
+      - name: Say when the review did not run
+        # A green job with no comment reads as "no findings". When the reviewer fails,
+        # say so on the pull request, so silence is never mistaken for a pass.
+        if: steps.review.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          echo "::warning::The compliance review did not complete. The hard checks ran, but no AI review was done."
+          gh pr comment "$PR" --body "**Compliance review:** did not run. The reviewer failed before it could read the change, so there is no finding either way. The hard checks still ran. A failure in under a second with no cost usually means the API key is invalid or out of credit. [Run log]($RUN_URL)"
